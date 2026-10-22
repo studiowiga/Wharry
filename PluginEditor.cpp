@@ -13,11 +13,11 @@ namespace
 
     // ---- emplacements des commandes dans le repère 1240 x 928 (générés par tools/design_art.py -> tools/layout.txt) ----
     constexpr float kLedR = 6.4f;
-    const Point<float> kKnob (731.3f, 185.8f);  constexpr float kKnobR = 59.9f, kCapR = 44.5f;   // sélecteur 21 crans
+    const Point<float> kKnob (720.2f, 288.5f);  constexpr float kKnobR = 59.9f, kCapR = 44.5f;   // sélecteur 21 crans
     const Point<float> kSmall[3] = { { 723.6f, 498.2f }, { 837.4f, 498.2f }, { 952.1f, 495.6f } };   // GLIDE, TONE, MIX
     constexpr float kSmallR = 41.1f, kSmallCapR = 31.7f;
     const char* const kSmallId[3] = { "smooth", "tone", "mix" };
-    const Rectangle<float> kScreen (904.2f, 214.9f, 121.5f, 171.2f);
+    const Rectangle<float> kScreen (810.0f, 174.6f, 213.2f, 241.4f);
     const Rectangle<float> kFs (770.7f, 642.9f, 130.1f, 130.1f);          // footswitch ON / OFF
     const Point<float> kFsLed (937.6f, 719.0f);
     const Rectangle<float> kToggle (953.8f, 91.6f, 53.1f, 37.7f);       // inverseur CLASSIC / CHORDS
@@ -451,7 +451,7 @@ private:
     // écran : mode / état, famille + numéro, programmes voisins et programme choisi, décalage en direct, barres de course
     void drawScreen (Graphics& g)
     {
-        const auto sc = r (kScreen).reduced (3.0f * s);
+        const auto sc = r (kScreen);
         g.setColour (kScreenBg); g.fillRoundedRectangle (sc, 4.0f * s);
         const int cur = jlimit (0, wharry::kNumPrograms - 1, drawnProgram);
         const auto& pr = wharry::program (cur);

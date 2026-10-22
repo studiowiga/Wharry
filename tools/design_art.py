@@ -19,6 +19,14 @@ OX = (W - (CX1 - CX0) * S) / 2.0
 OY = 6.0
 def C(x, y): return (OX + (x - CX0) * S, OY + (y - CY0) * S)
 
+# ---------- 0) éléments déplacés ----------
+KNOB_OLD, KNOB_NEW, KNOB_RS = (821, 258), (808, 378), 76          # sélecteur : centré verticalement sur l'écran, à sa gauche
+SCR_OUT = (905, 228, 1172, 528)                                   # écran agrandi (cadre extérieur)
+kyy, kxx = np.mgrid[0:2 * KNOB_RS, 0:2 * KNOB_RS]
+ka = np.clip((KNOB_RS - 5.0 - np.hypot(kxx - KNOB_RS + 0.5, kyy - KNOB_RS + 0.5)) / 2.0, 0, 1)
+knob_rgb = A[KNOB_OLD[1] - KNOB_RS:KNOB_OLD[1] + KNOB_RS, KNOB_OLD[0] - KNOB_RS:KNOB_OLD[0] + KNOB_RS]
+knob_sprite = np.dstack([knob_rgb, (ka * 255).astype(np.uint8)])
+
 # ---------- 1) nettoyage (inpainting) ----------
 mask = np.zeros(A.shape[:2], np.uint8)
 def text_mask(x0, y0, x1, y1, thr=40, grow=2):
@@ -58,12 +66,13 @@ inpainted = cv2.inpaint(A, mask, 6, cv2.INPAINT_TELEA)
 ZX0, ZY0, ZX1, ZY1 = 717, 140, 1016, 515
 yy3, xx3 = np.mgrid[ZY0:ZY1, ZX0:ZX1]
 rk = np.hypot(xx3 - 822, yy3 - 256)
-knob = rk < 78                                           # bouton + son socle (un peu plus bas que le chapeau)
-halo = (rk >= 78) & (rk < 93) & (yy3 < 292)               # reflet des anciennes LED autour du bouton (garde l'ombre portée du bas)
-zone_mask = ((mask[ZY0:ZY1, ZX0:ZX1] > 0) | halo) & ~knob
+knob = np.zeros_like(rk, bool)                           # l'ancien emplacement du sélecteur est entièrement refait
+oldk = rk < 96                                           # sélecteur d'origine + son ombre + reflets des LED
+vline = (np.abs(xx3 - 812) < 9) & (yy3 > 330) & (yy3 < 492)   # trait vertical sous le sélecteur d'origine
+zone_mask = (mask[ZY0:ZY1, ZX0:ZX1] > 0) | oldk | vline
 zone_mask = cv2.dilate(zone_mask.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool) & ~knob
 Z = A[ZY0:ZY1, ZX0:ZX1].astype(np.float32)
-clean_px = ~zone_mask & ~(rk < 100) & (np.abs(xx3 - 813) > 4)
+clean_px = ~zone_mask & ~(rk < 104) & (np.abs(xx3 - 813) > 6)
 X = np.stack([xx3[clean_px], yy3[clean_px], np.ones(clean_px.sum())], 1).astype(np.float64)
 coef = np.linalg.lstsq(X, Z[clean_px].astype(np.float64), rcond=None)[0]
 plane = (np.stack([xx3, yy3, np.ones_like(xx3)], -1).astype(np.float64) @ coef).astype(np.float32)
@@ -77,11 +86,35 @@ soft[knob] = 0
 region = inpainted[ZY0:ZY1, ZX0:ZX1].astype(np.float32)
 inpainted[ZY0:ZY1, ZX0:ZX1] = (synth * soft + region * (1 - soft)).astype(np.uint8)
 
-# écran vidé : le plugin y dessine l'affichage
-SCR = (1024, 284, 1166, 484)
-h, w = SCR[3] - SCR[1], SCR[2] - SCR[0]
-yy = np.linspace(0, 1, h)[:, None, None]
-inpainted[SCR[1]:SCR[3], SCR[0]:SCR[2]] = np.broadcast_to(np.array([8, 16, 24]) * (1 - 0.3 * yy), (h, w, 3)).astype(np.uint8)
+# sélecteur recollé à sa nouvelle place, avec son ombre portée (lumière en haut à gauche)
+base = inpainted.astype(np.float32)
+R2 = KNOB_RS + 20
+cx, cy = KNOB_NEW
+shm = np.zeros(A.shape[:2], np.float32)
+cv2.circle(shm, (cx + 5, cy + 9), KNOB_RS - 4, 1.0, -1)
+shm = cv2.GaussianBlur(shm, (0, 0), 8) * 0.55
+base *= (1 - shm[..., None])
+spr = knob_sprite.astype(np.float32)
+sl = (slice(cy - KNOB_RS, cy + KNOB_RS), slice(cx - KNOB_RS, cx + KNOB_RS))
+al = spr[..., 3:4] / 255.0
+base[sl] = spr[..., :3] * al + base[sl] * (1 - al)
+inpainted = np.clip(base, 0, 255).astype(np.uint8)
+
+# écran agrandi : cadre noir en creux + vitre (le plugin dessine l'affichage dans la vitre)
+scr_img = Image.fromarray(inpainted)
+sd = ImageDraw.Draw(scr_img, "RGBA")
+x0, y0, x1, y1 = SCR_OUT
+shadow = Image.new("L", scr_img.size, 0); ImageDraw.Draw(shadow).rounded_rectangle((x0 - 2, y0 - 1, x1 + 3, y1 + 5), 16, fill=170)
+shadow = shadow.filter(ImageFilter.GaussianBlur(5))
+scr_img = Image.composite(Image.new("RGB", scr_img.size, (25, 4, 6)), scr_img, shadow)
+sd = ImageDraw.Draw(scr_img, "RGBA")
+sd.rounded_rectangle((x0, y0, x1, y1), 15, fill=(14, 12, 13), outline=(70, 22, 26), width=2)
+sd.rounded_rectangle((x0 + 3, y0 + 3, x1 - 3, y1 - 3), 13, outline=(36, 32, 34), width=1)
+G = 9
+sd.rounded_rectangle((x0 + G, y0 + G, x1 - G, y1 - G), 9, fill=(8, 15, 22))
+sd.line((x0 + G + 8, y0 + G + 1, x1 - G - 8, y0 + G + 1), fill=(120, 130, 140, 120), width=1)   # reflet sur la vitre
+inpainted = np.array(scr_img)
+SCR = (x0 + G, y0 + G, x1 - G, y1 - G)
 clean = Image.fromarray(inpainted)
 
 # ---------- 2) mise à l'échelle sur le fond ----------
@@ -156,7 +189,7 @@ sprite(TG, "toggle_r.png"); sprite(TG, "toggle_l.png", flip=True)
 with open(os.path.join(ROOT, "tools", "layout.txt"), "w") as fo:
     def P(n, x, y): px, py = C(x, y); fo.write(f"{n} {px:.1f} {py:.1f}\n")
     for i, (x, y) in enumerate(LEDS): P(f"led{i}", x, y)
-    P("knob", 822, 250); fo.write(f"knobR {70 * S:.1f} capR {52 * S:.1f}\n")
+    P("knob", KNOB_NEW[0] + 1, KNOB_NEW[1] - 8); fo.write(f"knobR {70 * S:.1f} capR {52 * S:.1f}\n")
     for n, (x, y) in (("glide", (813, 615)), ("tone", (946, 615)), ("mix", (1080, 612))): P(n, x, y)
     fo.write(f"smallR {48 * S:.1f} smallCapR {37 * S:.1f}\n")
     P("screen0", SCR[0], SCR[1]); P("screen1", SCR[2], SCR[3])
