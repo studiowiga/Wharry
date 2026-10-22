@@ -39,10 +39,43 @@ for t in [(722, 82, 895, 120),            # WHAMMY (haut)
 
 ARC = [(770, 348), (745, 327), (733, 298), (729, 264), (733, 230), (745, 198), (764, 179), (788, 167), (814, 163), (842, 167), (869, 179)]
 LIST = [(897, 209), (911, 242), (913, 274), (909, 306), (896, 340), (893, 373), (893, 406), (893, 440), (893, 473), (893, 506)]
-LEDS = ARC + LIST                                  # 11 + 10 = 21 (la dernière LED de la liste est ajoutée)
-for i, (x, y) in enumerate(LEDS): circ_mask(x, y, 17 if i < 6 or i == 13 else 12)   # LED allumées dans le design : halo plus large
+LEDS = ARC + LIST                                  # LED et étiquettes du design effacées : le programme s'affiche sur l'écran
+for i, (x, y) in enumerate(LEDS): circ_mask(x, y, 15)
 circ_mask(1063, 873, 30)                           # LED du footswitch (dessinée par le plugin)
-inpainted = cv2.inpaint(A, mask, 5, cv2.INPAINT_TELEA)
+# halos orangés des LED allumées (à gauche du sélecteur) : détectés par leur vert élevé, puis reconstruits
+reg = (717, 150, 800, 385)
+gmed = np.median(A[reg[1]:reg[3], reg[0]:reg[2], 1])
+R0 = A[reg[1]:reg[3], reg[0]:reg[2]].astype(np.int32)
+glow = (((R0[..., 1] - R0[..., 2]) > 6) & (R0[..., 0] > 175)).astype(np.uint8) * 255   # orangé : vert > bleu (le panneau rouge a bleu >= vert)
+yy2, xx2 = np.mgrid[reg[1]:reg[3], reg[0]:reg[2]]
+glow = cv2.dilate(glow, np.ones((11, 11), np.uint8))
+glow[np.hypot(xx2 - 822, yy2 - 250) < 77] = 0           # épargne le bouton
+mask[reg[1]:reg[3], reg[0]:reg[2]] |= glow
+inpainted = cv2.inpaint(A, mask, 6, cv2.INPAINT_TELEA)
+
+# zone du sélecteur (anciennes LED, halos, étiquettes) : panneau brossé reconstruit =
+# dégradé de couleur du panneau (plan ajusté sur les pixels propres) + grain brossé pris dans une zone propre
+ZX0, ZY0, ZX1, ZY1 = 717, 140, 1016, 515
+yy3, xx3 = np.mgrid[ZY0:ZY1, ZX0:ZX1]
+rk = np.hypot(xx3 - 822, yy3 - 256)
+knob = rk < 78                                           # bouton + son socle (un peu plus bas que le chapeau)
+halo = (rk >= 78) & (rk < 93) & (yy3 < 292)               # reflet des anciennes LED autour du bouton (garde l'ombre portée du bas)
+zone_mask = ((mask[ZY0:ZY1, ZX0:ZX1] > 0) | halo) & ~knob
+zone_mask = cv2.dilate(zone_mask.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool) & ~knob
+Z = A[ZY0:ZY1, ZX0:ZX1].astype(np.float32)
+clean_px = ~zone_mask & ~(rk < 100) & (np.abs(xx3 - 813) > 4)
+X = np.stack([xx3[clean_px], yy3[clean_px], np.ones(clean_px.sum())], 1).astype(np.float64)
+coef = np.linalg.lstsq(X, Z[clean_px].astype(np.float64), rcond=None)[0]
+plane = (np.stack([xx3, yy3, np.ones_like(xx3)], -1).astype(np.float64) @ coef).astype(np.float32)
+tex_src = A[365:530, 828:878].astype(np.float32)
+tex = tex_src - cv2.GaussianBlur(tex_src, (0, 0), 6)
+th, tw = tex.shape[:2]
+tile = np.tile(tex, ((ZY1 - ZY0) // th + 1, (ZX1 - ZX0) // tw + 1, 1))[:ZY1 - ZY0, :ZX1 - ZX0]
+synth = np.clip(plane + tile, 0, 255)
+soft = cv2.GaussianBlur(zone_mask.astype(np.float32), (0, 0), 4.5)[..., None]
+soft[knob] = 0
+region = inpainted[ZY0:ZY1, ZX0:ZX1].astype(np.float32)
+inpainted[ZY0:ZY1, ZX0:ZX1] = (synth * soft + region * (1 - soft)).astype(np.uint8)
 
 # écran vidé : le plugin y dessine l'affichage
 SCR = (1024, 284, 1166, 484)
@@ -82,11 +115,6 @@ def txt(x, y, s, size, font=FR, anchor="lm", spacing=0.0):
         return
     d.text((px, py), s, font=f, fill=INK, anchor=anchor)
 
-labels = ["SHALLOW", "DEEP", "OCT DN / OCT UP", "5TH DN / 4TH DN", "5TH / 7TH", "5TH / 6TH", "4TH / 5TH", "3RD / 4TH", "b3RD / 3RD", "2ND / 3RD", "4TH DN / 3RD DN"]
-for i, s in enumerate(labels):
-    x, y = LEDS[10 + i]
-    txt(x + 16, y + 1, s, 16)
-txt(752, 384, "BEND", 13, FM, "lm")
 txt(1113, 197, "CLASSIC · CHORDS", 13, FR, "mm")
 txt(813, 689, "GLIDE", 18, FR, "mm"); txt(946, 689, "TONE", 18, FR, "mm"); txt(1080, 689, "MIX", 18, FR, "mm")
 txt(750, 974, "WHARRY", 36, FL, "lm", spacing=13)

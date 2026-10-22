@@ -9,7 +9,7 @@ au format **pédale double** (fenêtre identique à Ring Think : 661 x 495 par d
 - Program Change façon Whammy 5 : 1-21 Classic, 22-42 Classic bypass, 43-63 Chords, 64-84 Chords bypass
 - Inverseur CLASSIC / CHORDS, footswitch ON / OFF (MIDI learn par clic droit)
 - Boutons GLIDE (lissage de la pédale), TONE (filtre de la voix traitée), MIX (dosage de l'effet)
-- Écran : programme, courbe intervalle / course, décalage en direct ; clic sur l'écran = menu des presets
+- Sélecteur 21 crans sans LED : l'écran affiche famille, numéro, programmes voisins, programme choisi, décalage en direct et course de la pédale ; clic sur l'écran = menu des presets
 - Suivi des notes jusqu'à ~35 Hz (7 cordes en G et plus bas)
 
 ## Visuel

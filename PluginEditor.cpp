@@ -12,7 +12,6 @@ namespace
     constexpr float kDefaultScale = 661.0f / 993.0f;             // fenêtre par défaut = 661 x 495 px (= taille minimale)
 
     // ---- emplacements des commandes dans le repère 1240 x 928 (générés par tools/design_art.py -> tools/layout.txt) ----
-    const Point<float> kLed[21] = { { 686.8f, 269.6f }, { 665.4f, 251.7f }, { 655.1f, 226.8f }, { 651.7f, 197.7f }, { 655.1f, 168.6f }, { 665.4f, 141.2f }, { 681.6f, 125.0f }, { 702.2f, 114.7f }, { 724.4f, 111.3f }, { 748.4f, 114.7f }, { 771.5f, 125.0f }, { 795.5f, 150.7f }, { 807.5f, 178.9f }, { 809.2f, 206.3f }, { 805.8f, 233.7f }, { 794.6f, 262.8f }, { 792.1f, 291.0f }, { 792.1f, 319.3f }, { 792.1f, 348.4f }, { 792.1f, 376.6f }, { 792.1f, 404.9f } };
     constexpr float kLedR = 6.4f;
     const Point<float> kKnob (731.3f, 185.8f);  constexpr float kKnobR = 59.9f, kCapR = 44.5f;   // sélecteur 21 crans
     const Point<float> kSmall[3] = { { 723.6f, 498.2f }, { 837.4f, 498.2f }, { 952.1f, 495.6f } };   // GLIDE, TONE, MIX
@@ -305,10 +304,6 @@ public:
             g.setColour (Colour (0xe0201a1a)); g.drawLine ({ a, b }, 3.2f * s);
         }
 
-        // ---- LED des 21 programmes ----
-        for (int i = 0; i < wharry::kNumPrograms; ++i)
-            drawLed (g, kLed[i], i == drawnProgram ? (drawnActive ? 1.0f : 0.3f) : 0.0f);
-
         // ---- GLIDE / TONE / MIX ----
         for (int i = 0; i < 3; ++i)
         {
@@ -349,7 +344,6 @@ public:
         drag = Drag::None;
         if (kScreen.contains (p)) { showPresetMenu(); return; }
         if (p.getDistanceFrom (kKnob) < kKnobR) { drag = Drag::Knob; dragStartY = p.y; dragStartProg = currentProgram(); return; }
-        for (int i = 0; i < wharry::kNumPrograms; ++i) if (p.getDistanceFrom (kLed[i]) < 11.0f) { proc.selectWhammyProgram (i); return; }
         for (int i = 0; i < 3; ++i)
             if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f)
             {
@@ -432,11 +426,10 @@ private:
     }
     int currentProgram() const { return jlimit (0, wharry::kNumPrograms - 1, (int) std::lround (proc.apvts.getRawParameterValue ("program")->load())); }
     bool param (const char* id) const { return proc.apvts.getRawParameterValue (id)->load() > 0.5f; }
-    static float knobAngle (int prog)
+    static float knobAngle (int prog)      // 21 crans répartis sur ± 150°
     {
         prog = jlimit (0, wharry::kNumPrograms - 1, prog);
-        const auto d = kLed[prog] - kKnob;
-        return std::atan2 (d.x, -d.y);
+        return degreesToRadians (-150.0f + 300.0f * (float) prog / (float) (wharry::kNumPrograms - 1));
     }
 
     // LED : bille grise éteinte, cœur blanc chaud + halo ambré allumée
@@ -455,59 +448,59 @@ private:
         }
     }
 
-    // écran : mode, courbe intervalle / course de pédale, nom du programme, décalage, barres de position
+    // écran : mode / état, famille + numéro, programmes voisins et programme choisi, décalage en direct, barres de course
     void drawScreen (Graphics& g)
     {
         const auto sc = r (kScreen).reduced (3.0f * s);
         g.setColour (kScreenBg); g.fillRoundedRectangle (sc, 4.0f * s);
-        const auto& pr = wharry::program (drawnProgram);
-        const float pad = 7.0f * s;
-        auto area = sc.reduced (pad);
+        const int cur = jlimit (0, wharry::kNumPrograms - 1, drawnProgram);
+        const auto& pr = wharry::program (cur);
+        const float alpha = drawnActive ? 1.0f : 0.4f;
+        auto area = sc.reduced (7.0f * s);
         const float fh = sc.getHeight();
 
-        g.setFont (Font (FontOptions (typefaceBold).withHeight (fh * 0.075f)));
-        g.setColour (kCyan.withAlpha (drawnActive ? 0.85f : 0.35f));
-        auto top = area.removeFromTop (fh * 0.09f);
+        // ligne du haut : moteur + état
+        g.setFont (Font (FontOptions (typefaceBold).withHeight (fh * 0.068f)));
+        g.setColour (kCyan.withAlpha (drawnActive ? 0.85f : 0.4f));
+        auto top = area.removeFromTop (fh * 0.08f);
         g.drawText (drawnChords ? (param ("studio") ? "CHORDS HQ" : "CHORDS") : "CLASSIC", top, Justification::centredLeft);
         g.drawText (drawnActive ? "ON" : "BYPASS", top, Justification::centredRight);
+        area.removeFromTop (fh * 0.02f);
+        g.setColour (kCyan.withAlpha (0.2f)); g.fillRect (area.getX(), area.getY(), area.getWidth(), jmax (1.0f, 0.8f * s));
+        area.removeFromTop (fh * 0.025f);
 
-        // courbe : intervalle en fonction de la course (Whammy / Harmony), niveau de la voix (Detune)
-        auto graph = area.removeFromTop (fh * 0.36f).reduced (0, fh * 0.03f);
-        g.setColour (kCyan.withAlpha (0.15f));
-        g.drawHorizontalLine ((int) graph.getCentreY(), graph.getX(), graph.getRight());
-        float lo = jmin (pr.up, pr.down, 0.0f), hi = jmax (pr.up, pr.down, 0.0f);
-        if (pr.type == wharry::Detune) { lo = 0.0f; hi = 1.0f; }
-        if (hi - lo < 1.0f) hi = lo + 1.0f;
-        auto mapY = [&] (float v) { return graph.getBottom() - (v - lo) / (hi - lo) * graph.getHeight(); };
-        Path curve;
-        for (int i = 0; i <= 24; ++i)
+        // famille + position sur le sélecteur
+        const char* fam = pr.type == wharry::Whammy ? "WHAMMY" : (pr.type == wharry::Detune ? "DETUNE" : "HARMONY");
+        g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.068f)));
+        g.setColour (kCyan.withAlpha (0.75f * alpha));
+        auto famRow = area.removeFromTop (fh * 0.08f);
+        g.drawText (fam, famRow, Justification::centredLeft);
+        g.drawText (String (cur + 1) + " / " + String (wharry::kNumPrograms), famRow, Justification::centredRight);
+
+        // liste défilante : programme précédent, programme choisi (en grand), programme suivant
+        auto row = [&] (int idx, float h, float size, float a, bool bold)
         {
-            const float t = (float) i / 24.0f;
-            const float v = pr.type == wharry::Detune ? t : pr.up + (pr.down - pr.up) * t;
-            const Point<float> q (graph.getX() + t * graph.getWidth(), mapY (v));
-            if (i == 0) curve.startNewSubPath (q); else curve.lineTo (q);
-        }
-        const float alpha = drawnActive ? 1.0f : 0.4f;
-        g.setColour (kCyan.withAlpha (0.25f * alpha)); g.strokePath (curve, PathStrokeType (4.0f * s));
-        g.setColour (kCyan.withAlpha (alpha));         g.strokePath (curve, PathStrokeType (1.6f * s));
-        const float tp = jlimit (0.0f, 1.0f, drawnPedal);
-        const float vNow = pr.type == wharry::Detune ? tp : pr.up + (pr.down - pr.up) * tp;
-        const Point<float> dot (graph.getX() + tp * graph.getWidth(), mapY (vNow));
-        g.setColour (Colours::white.withAlpha (alpha)); g.fillEllipse (dot.x - 3.2f * s, dot.y - 3.2f * s, 6.4f * s, 6.4f * s);
+            auto rr = area.removeFromTop (h);
+            if (idx < 0 || idx >= wharry::kNumPrograms) return;
+            g.setFont (Font (FontOptions (bold ? typefaceBold : typeface).withHeight (size)));
+            g.setColour (Colour (0xffe8fbff).withAlpha (a * alpha));
+            g.drawFittedText (wharry::program (idx).label, rr.toNearestInt(), Justification::centred, 1, 0.55f);
+        };
+        row (cur - 1, fh * 0.09f, fh * 0.065f, 0.35f, false);
+        row (cur,     fh * 0.16f, fh * 0.125f, 1.0f,  true);
+        row (cur + 1, fh * 0.09f, fh * 0.065f, 0.35f, false);
 
-        // nom du programme + décalage courant
-        g.setColour (Colour (0xffe8fbff).withAlpha (alpha));
-        g.setFont (Font (FontOptions (typefaceBold).withHeight (fh * 0.13f)));
-        g.drawFittedText (pr.label, area.removeFromTop (fh * 0.17f).toNearestInt(), Justification::centred, 1, 0.6f);
-        g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.085f)));
+        // décalage courant (ou plage du programme)
+        g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.08f)));
         String val;
-        if (pr.type == wharry::Detune) val = String (roundToInt (pr.up)) + " cents";
+        if (pr.type == wharry::Detune) val = String (roundToInt (pr.up)) + " cents  ·  " + String (roundToInt (jlimit (0.0f, 1.0f, drawnPedal) * 100.0f)) + " %";
         else { const float sm = drawnSemis; val = (sm >= 0.0f ? "+" : "") + String (sm, 1) + " st"; }
-        g.setColour (kCyan.withAlpha (0.9f * alpha));
+        g.setColour (kCyan.withAlpha (0.95f * alpha));
         g.drawText (val, area.removeFromTop (fh * 0.1f), Justification::centred);
 
         // barres : position de la pédale
         auto bars = area.reduced (0, fh * 0.015f);
+        const float tp = jlimit (0.0f, 1.0f, drawnPedal);
         const int nb = 14;
         const float bw = bars.getWidth() / (float) nb;
         for (int i = 0; i < nb; ++i)
@@ -556,7 +549,6 @@ private:
         if (prog != drawnProgram)
         {
             repaint (r (Rectangle<float> (kKnob.x - kKnobR, kKnob.y - kKnobR, 2 * kKnobR, 2 * kKnobR)).toNearestInt().expanded (2));
-            for (int i : { prog, drawnProgram }) if (i >= 0) repaint (ledArea (kLed[i]));
             drawnProgram = prog; screen = true;
         }
         if (chords != drawnChords || active != drawnActive)
@@ -565,7 +557,6 @@ private:
             repaint (r (kToggle).toNearestInt().expanded (3));
             repaint (r (kFs).toNearestInt().expanded (4));
             repaint (ledArea (kFsLed));
-            repaint (ledArea (kLed[prog]));
         }
         for (int i = 0; i < 3; ++i)
         {
