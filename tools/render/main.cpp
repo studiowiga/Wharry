@@ -28,7 +28,10 @@ int main (int argc, char** argv)
     shot ("wharry_basse", 1.0f, 15, true, true);
     shot ("wharry_bypass", 0.3f, 3, false, false);
     static_cast<WharryEditor*> (ed.get())->setScaleIndex (2);
-    shot ("wharry_100pc_basse", 1.0f, 9, false, false);
+    shot ("wharry_100pc_haute", 0.0f, 1, false, true);
+    shot ("wharry_100pc_milieu", 0.55f, 15, true, true);
+    shot ("wharry_100pc_basse", 1.0f, 1, false, true);
+    shot ("wharry_100pc_bypass", 1.0f, 9, false, false);
     ed.reset();
     return 0;
 }

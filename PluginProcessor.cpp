@@ -37,8 +37,8 @@ AudioProcessorValueTreeState::ParameterLayout WharryProcessor::createLayout()
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "pedal", 1 }, "Expression Pedal (toe up 0 % / toe down 100 %)",
                                                         NormalisableRange<float> (0.0f, 1.0f), 0.0f,
                                                         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + " %"; })));
-    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "chords", 1 }, "Classic / Chords (left footswitch)", false));
-    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "active", 1 }, "Effect On (right footswitch)", true));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "chords", 1 }, "Classic / Chords (switch)", false));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "active", 1 }, "Effect On (footswitch)", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "studio", 1 }, "Chords Studio HQ engine (adds latency)", false));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "smooth", 1 }, "Glide (pedal smoothing)",
                                                         NormalisableRange<float> (0.0f, 250.0f, 0.0f, 0.5f), 30.0f,
