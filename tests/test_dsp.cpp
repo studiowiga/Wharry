@@ -133,7 +133,7 @@ int main()
 
     std::printf ("\n== HARMONY 3RD/4TH orteil levé : sec + tierce (sinus A3) ==\n");
     {
-        Engine e; Settings s; s.programIdx = 18; s.pedal = 0.0f;
+        Engine e; Settings s; s.programIdx = 17; s.pedal = 0.0f;
         e.setSettings (s); e.prepare (fs, 512);
         auto y = run (e, s, tone (fs, n, { 220.0 }, false));
         auto pk = peaksHz (y, (int) (fs * 0.8), fs, 2, 60.0);

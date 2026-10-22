@@ -28,9 +28,9 @@ endif()
 
 # visuel de la pédale intégré au plugin (aucun fichier externe à l'exécution)
 juce_add_binary_data(WharryAssets SOURCES
-  background.png treadle_up.png treadle_down.png
-  cap_big.png cap_fsL.png cap_fsR.png
-  led_r_on.png led_r_off.png led_p_on.png led_p_off.png led_s_on.png led_s_off.png)
+  background.png treadle_down.png
+  fs_on.png fs_off.png toggle_l.png toggle_r.png
+  fonts/Poppins-Medium.ttf fonts/Poppins-Bold.ttf)
 
 if(APPLE)
   set(WHARRY_FORMATS VST3 AU)

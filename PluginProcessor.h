@@ -11,7 +11,7 @@ struct FactoryPreset
     const char* name;
     int  program;      // 0..20 (ordre du sélecteur)
     bool chords, studio;
-    float smoothMs, dry, wet;
+    float glideMs, tone, mix;
 };
 
 class WharryProcessor : public juce::AudioProcessor,
@@ -80,7 +80,7 @@ private:
     double sr = 44100.0;
     juce::AudioBuffer<float> mono;
 
-    std::atomic<float> *pProgram, *pPedal, *pChords, *pStudio, *pActive, *pSmooth, *pHeel, *pToe, *pInvert, *pDry, *pWet, *pPC;
+    std::atomic<float> *pProgram, *pPedal, *pChords, *pStudio, *pActive, *pSmooth, *pHeel, *pToe, *pInvert, *pTone, *pMix, *pPC;
 
     std::atomic<float> pedalLive { 0.0f }, pedalShown { 0.0f }, semis { 0.0f }, detHz { 0.0f };
     std::atomic<int> reportedLatency { 0 }, latencyToSet { -1 };

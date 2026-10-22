@@ -49,13 +49,13 @@ inline const Program& program (int i)
         { "Detune Deep",            "DEEP",          Detune,  25.0f,  25.0f },
         { "Harmony Oct Down/Oct Up","OCT DN/OCT UP", Harmony,-12.0f,  12.0f },
         { "Harmony 5th Dn/4th Dn",  "5TH DN/4TH DN", Harmony, -7.0f,  -5.0f },
+        { "Harmony 5th Up/7th Up",  "5TH / 7TH",     Harmony,  7.0f,  10.0f },
+        { "Harmony 5th Up/6th Up",  "5TH / 6TH",     Harmony,  7.0f,   9.0f },
+        { "Harmony 4th Up/5th Up",  "4TH / 5TH",     Harmony,  5.0f,   7.0f },
+        { "Harmony 3rd Up/4th Up",  "3RD / 4TH",     Harmony,  4.0f,   5.0f },
+        { "Harmony b3rd Up/3rd Up", "b3RD / 3RD",    Harmony,  3.0f,   4.0f },
+        { "Harmony 2nd Up/3rd Up",  "2ND / 3RD",     Harmony,  2.0f,   4.0f },
         { "Harmony 4th Dn/3rd Dn",  "4TH DN/3RD DN", Harmony, -5.0f,  -4.0f },
-        { "Harmony 5th Up/7th Up",  "5TH/7TH",       Harmony,  7.0f,  10.0f },
-        { "Harmony 5th Up/6th Up",  "5TH/6TH",       Harmony,  7.0f,   9.0f },
-        { "Harmony 4th Up/5th Up",  "4TH/5TH",       Harmony,  5.0f,   7.0f },
-        { "Harmony 3rd Up/4th Up",  "3RD/4TH",       Harmony,  4.0f,   5.0f },
-        { "Harmony b3rd Up/3rd Up", "b3RD/3RD",      Harmony,  3.0f,   4.0f },
-        { "Harmony 2nd Up/3rd Up",  "2ND/3RD",       Harmony,  2.0f,   4.0f },
     };
     return p[i < 0 ? 0 : (i >= kNumPrograms ? kNumPrograms - 1 : i)];
 }
@@ -497,8 +497,8 @@ struct Settings
     bool  active = true;         // footswitch ON / OFF
     float pedal = 0.0f;          // 0 = orteil levé (position haute), 1 = orteil enfoncé (position basse)
     float smoothMs = 30.0f;      // lissage de la pédale (contrôleurs MIDI en marches d'escalier)
-    float dryLevel = 1.0f;       // niveau sec (Harmony / Detune)
-    float wetLevel = 1.0f;       // niveau de la voix traitée
+    float mix = 1.0f;            // MIX : WHAMMY = fondu sec / traité ; HARMONY / DETUNE = niveau de la voix ajoutée
+    float tone = 1.0f;           // TONE : filtre passe-bas sur la voix traitée (1 = ouvert)
 };
 
 class Engine
@@ -513,6 +513,8 @@ public:
         studioPV.prepare (n, 8);
         dryDelay.prepare (n + 8);
         wetAlign.prepare (n + 8);
+        toneLp.lowpass (fs, 20000.0 > fs * 0.45 ? fs * 0.45 : 20000.0, 0.707);
+        lastTone = -1.0f;
         fadeStep = (float) (1.0 / (0.012 * fs));
         bypassStep = (float) (1.0 / (0.010 * fs));
         pedalSm = cur.pedal;
@@ -522,7 +524,7 @@ public:
     }
     void reset()
     {
-        classic.reset(); live.reset(); studioPV.reset(); dryDelay.reset(); wetAlign.reset();
+        classic.reset(); live.reset(); studioPV.reset(); dryDelay.reset(); wetAlign.reset(); toneLp.reset();
     }
 
     void setSettings (const Settings& s) { cur = s; }
@@ -538,6 +540,15 @@ public:
     void process (const float* in, float* out, int n)
     {
         const float a = std::exp (-1.0f / (std::max (0.5f, cur.smoothMs) * 0.001f * (float) sr));
+        if (std::abs (cur.tone - lastTone) > 0.001f)
+        {
+            // TONE : 700 Hz (fermé) -> 20 kHz (ouvert), courbe exponentielle ; coefficients mis à jour sans remise à zéro
+            lastTone = cur.tone;
+            const double fc = std::min (sr * 0.45, 700.0 * std::pow (20000.0 / 700.0, (double) clampf (cur.tone, 0.0f, 1.0f)));
+            const float z1 = toneLp.z1, z2 = toneLp.z2;
+            toneLp.lowpass (sr, fc, 0.707); toneLp.z1 = z1; toneLp.z2 = z2;
+        }
+        const bool toneOn = cur.tone < 0.995f;
         for (int i = 0; i < n; ++i)
         {
             // changement de programme / de moteur : fondu court vers 0, bascule, puis retour
@@ -561,17 +572,16 @@ public:
             pedalSm = cur.pedal + a * (pedalSm - cur.pedal);
 
             const Program& p = program (applied.programIdx);
-            float semis, wetLvl = cur.wetLevel, dryLvl = 0.0f;
+            float semis, wetLvl = cur.mix;
             if (p.type == Detune)
             {
                 semis = p.up * 0.01f;            // cents -> demi-tons
                 wetLvl *= pedalSm;               // la pédale dose la voix désaccordée
-                dryLvl = cur.dryLevel;
             }
             else
             {
                 semis = p.up + (p.down - p.up) * pedalSm;
-                if (p.type == Harmony) { dryLvl = cur.dryLevel; wetLvl *= 0.9f; }
+                if (p.type == Harmony) wetLvl *= 0.9f;
             }
             lastSemis = semis;
             const float ratio = std::exp2 (semis / 12.0f);
@@ -583,11 +593,18 @@ public:
             else if (applied.studio && p.type != Detune) wet = studioPV.process (x, ratio);
             else                                  wet = wetAlign.process (live.process (x, ratio), lat);
             const float dry = dryDelay.process (x, lat);
+            if (toneOn) wet = toneLp.process (wet);
+            else        toneLp.process (wet);   // garde l'état du filtre à jour (pas de clic à la réouverture)
 
-            // en WHAMMY le sec disparaît ; pendant un fondu de bascule il remplace la voix traitée (pas de trou)
+            // WHAMMY : MIX fond le sec et la voix traitée (100 % = comme la pédale) ;
+            // pendant un fondu de bascule le sec remplace la voix traitée (pas de trou)
             float fx;
-            if (p.type == Whammy) fx = wet * cur.wetLevel * mixGain + dry * (1.0f - mixGain);
-            else                  fx = dry * dryLvl + wet * wetLvl * mixGain;
+            if (p.type == Whammy)
+            {
+                const float m = cur.mix * mixGain;
+                fx = wet * m + dry * (1.0f - m);
+            }
+            else fx = dry + wet * wetLvl * mixGain;
 
             out[i] = dry + (fx - dry) * bypassGain;
         }
@@ -598,6 +615,8 @@ private:
     GrainShifter classic, live;
     ChordShifter studioPV;
     DelayLine dryDelay, wetAlign;
+    Biquad toneLp;
+    float lastTone = -1.0f;
     Settings cur, applied;
     float pedalSm = 0, mixGain = 1, bypassGain = 1, fadeStep = 0.001f, bypassStep = 0.001f, lastSemis = 0;
 };

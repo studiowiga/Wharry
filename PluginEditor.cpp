@@ -11,23 +11,22 @@ namespace
     const float kScales[3] = { 661.0f / 993.0f, 0.75f, 1.0f };
     constexpr float kDefaultScale = 661.0f / 993.0f;             // fenêtre par défaut = 661 x 495 px (= taille minimale)
 
-    // ---- emplacements des commandes (à recaler sur le design définitif) ----
-    constexpr float kKnobX = 232.0f, kKnobY = 172.0f, kKnobR = 70.0f;           // sélecteur 21 crans
-    constexpr float kKnobArc = 150.0f;                                          // ± degrés du premier au dernier cran
-    inline Point<float> progLed (int i)                                          // LED de la liste des programmes
-    {
-        const int col = i < 12 ? 0 : 1, row = i < 12 ? i : i - 12;
-        return { (col == 0 ? 410.0f : 600.0f) + 6.0f, 60.0f + (float) row * 19.0f };
-    }
-    inline Rectangle<float> progLabel (int i) { auto p = progLed (i); return { p.x - 10.0f, p.y - 9.0f, 175.0f, 18.0f }; }
-    const Rectangle<float> kSwitch (920.0f, 60.0f, 60.0f, 26.0f);                // inverseur CLASSIC / CHORDS
-    const Rectangle<float> kSwitchHit (830.0f, 52.0f, 230.0f, 42.0f);
-    const Rectangle<float> kPresetBox (832.0f, 100.0f, 258.0f, 30.0f);           // menu déroulant des presets
-    constexpr float kFsLX = 200.0f, kFsRX = 1040.0f, kFsY = 760.0f, kFsScale = 1.15f;
-    constexpr float kLedLX = 200.0f, kLedRX = 1040.0f, kLedY = 668.0f;
-    const Rectangle<float> kStatus (300.0f, 874.0f, 640.0f, 24.0f);              // ligne d'état
-    const Colour kOrange (0xffff9a1a), kRed (0xffff2a2a), kText (0xfff2e6e6);
-    constexpr int kFrames = 25;                                                  // positions précalculées du plateau
+    // ---- emplacements des commandes dans le repère 1240 x 928 (générés par tools/design_art.py -> tools/layout.txt) ----
+    const Point<float> kLed[21] = { { 686.8f, 269.6f }, { 665.4f, 251.7f }, { 655.1f, 226.8f }, { 651.7f, 197.7f }, { 655.1f, 168.6f }, { 665.4f, 141.2f }, { 681.6f, 125.0f }, { 702.2f, 114.7f }, { 724.4f, 111.3f }, { 748.4f, 114.7f }, { 771.5f, 125.0f }, { 795.5f, 150.7f }, { 807.5f, 178.9f }, { 809.2f, 206.3f }, { 805.8f, 233.7f }, { 794.6f, 262.8f }, { 792.1f, 291.0f }, { 792.1f, 319.3f }, { 792.1f, 348.4f }, { 792.1f, 376.6f }, { 792.1f, 404.9f } };
+    constexpr float kLedR = 6.4f;
+    const Point<float> kKnob (731.3f, 185.8f);  constexpr float kKnobR = 59.9f, kCapR = 44.5f;   // sélecteur 21 crans
+    const Point<float> kSmall[3] = { { 723.6f, 498.2f }, { 837.4f, 498.2f }, { 952.1f, 495.6f } };   // GLIDE, TONE, MIX
+    constexpr float kSmallR = 41.1f, kSmallCapR = 31.7f;
+    const char* const kSmallId[3] = { "smooth", "tone", "mix" };
+    const Rectangle<float> kScreen (904.2f, 214.9f, 121.5f, 171.2f);
+    const Rectangle<float> kFs (770.7f, 642.9f, 130.1f, 130.1f);          // footswitch ON / OFF
+    const Point<float> kFsLed (937.6f, 719.0f);
+    const Rectangle<float> kToggle (953.8f, 91.6f, 53.1f, 37.7f);       // inverseur CLASSIC / CHORDS
+    const Rectangle<float> kToggleHit = kToggle.expanded (14.0f, 22.0f);
+    const Rectangle<float> kPlate (201.4f, 15.4f, 432.3f, 822.6f);   // plateau
+    const Rectangle<float> kStatus (150.0f, 890.0f, 940.0f, 30.0f);                            // ligne d'état sous la pédale
+    const Colour kInk (0xffeee6e4), kWarm (0xffffc47a), kCyan (0xff5fe3ff), kScreenBg (0xff081018);
+    constexpr int kFrames = 25;                                                                // positions précalculées du plateau
 
     Image loadPng (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n).convertedToFormat (Image::ARGB); }
 
@@ -48,15 +47,59 @@ namespace
     };
 
     //==========================================================================
-    // Plateau de la pédale : morphing entre le calque « orteil levé » et le calque « orteil enfoncé ».
-    // Chaque ligne de pixels du contour est interpolée (perspective d'un plateau qui pivote), puis les deux images sont fondues.
-    class TreadleMorph
+    // Plateau de la pédale : il pivote autour de la charnière (côté talon, en bas). Chaque position est une
+    // perspective exacte du calque « orteil enfoncé » (pas de fondu entre deux images -> aucun dédoublement).
+    constexpr float kPlateL = 201.4f, kPlateR = 633.7f, kPlateTop = 15.4f, kHingeY = 838.0f;   // plateau à plat (orteil enfoncé)
+    constexpr float kRise = 14.0f, kWiden = 1.06f;                                            // orteil levé : pointe plus haute et plus large
+
+    struct Homography
+    {
+        double h[9] {};
+        // calcule H tel que H(dst[i]) = src[i] (4 couples de points)
+        bool solve (const Point<double> dst[4], const Point<double> src[4])
+        {
+            double A[8][9] {};
+            for (int i = 0; i < 4; ++i)
+            {
+                const double x = dst[i].x, y = dst[i].y, u = src[i].x, v = src[i].y;
+                double r1[9] = { x, y, 1, 0, 0, 0, -u * x, -u * y, u };
+                double r2[9] = { 0, 0, 0, x, y, 1, -v * x, -v * y, v };
+                std::copy (r1, r1 + 9, A[2 * i]); std::copy (r2, r2 + 9, A[2 * i + 1]);
+            }
+            for (int c = 0; c < 8; ++c)
+            {
+                int piv = c;
+                for (int r = c + 1; r < 8; ++r) if (std::abs (A[r][c]) > std::abs (A[piv][c])) piv = r;
+                if (std::abs (A[piv][c]) < 1e-12) return false;
+                for (int k = 0; k < 9; ++k) std::swap (A[c][k], A[piv][k]);
+                for (int r = 0; r < 8; ++r)
+                    if (r != c)
+                    {
+                        const double f = A[r][c] / A[c][c];
+                        for (int k = c; k < 9; ++k) A[r][k] -= f * A[c][k];
+                    }
+            }
+            for (int i = 0; i < 8; ++i) h[i] = A[i][8] / A[i][i];
+            h[8] = 1.0;
+            return true;
+        }
+        Point<double> map (double x, double y) const
+        {
+            const double w = h[6] * x + h[7] * y + h[8];
+            return { (h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w };
+        }
+    };
+
+    class TreadleWarp
     {
     public:
-        void setSources (Image upImg, Image downImg)
+        void setSource (Image downImg)
         {
-            up = std::move (upImg); down = std::move (downImg);
-            box = (opaqueBounds (up).getUnion (opaqueBounds (down))).expanded (4).getIntersection ({ 0, 0, kW, kH });
+            down = std::move (downImg);
+            const float cx = 0.5f * (kPlateL + kPlateR);
+            box = Rectangle<float> (cx - (cx - kPlateL) * kWiden - 4.0f, kPlateTop - kRise - 4.0f,
+                                    (kPlateR - kPlateL) * kWiden + 40.0f, kHingeY - kPlateTop + kRise + 40.0f)
+                      .getSmallestIntegerContainer().getIntersection ({ 0, 0, kW, kH });
             scale = -1.0f;
         }
         Rectangle<int> designBounds() const { return box; }
@@ -66,12 +109,11 @@ namespace
             if (std::abs (s - scale) < 1.0e-4f) return;
             scale = s;
             const int bw = jmax (1, roundToInt ((float) box.getWidth() * s)), bh = jmax (1, roundToInt ((float) box.getHeight() * s));
-            su = up.getClippedImage (box).rescaled (bw, bh, Graphics::highResamplingQuality).convertedToFormat (Image::ARGB);
-            sd = down.getClippedImage (box).rescaled (bw, bh, Graphics::highResamplingQuality).convertedToFormat (Image::ARGB);
-            ou = outline (su); od = outline (sd);
+            src = down.getClippedImage (box).rescaled (bw, bh, Graphics::highResamplingQuality).convertedToFormat (Image::ARGB);
             for (auto& f : frames) f = {};
-        }
+            }
 
+        // t = 0 : orteil levé, t = 1 : orteil enfoncé
         const Image& frame (int i)
         {
             i = jlimit (0, kFrames - 1, i);
@@ -80,89 +122,119 @@ namespace
         }
 
     private:
-        struct Outline { int top = 0, bottom = 0; std::vector<float> l, r; };
-
-        static Rectangle<int> opaqueBounds (const Image& im)
-        {
-            const Image::BitmapData bd (im, Image::BitmapData::readOnly);
-            int x0 = im.getWidth(), y0 = im.getHeight(), x1 = -1, y1 = -1;
-            for (int y = 0; y < im.getHeight(); ++y)
-                for (int x = 0; x < im.getWidth(); ++x)
-                    if (bd.getPixelColour (x, y).getAlpha() > 6) { x0 = jmin (x0, x); x1 = jmax (x1, x); y0 = jmin (y0, y); y1 = jmax (y1, y); }
-            return x1 < 0 ? Rectangle<int> (0, 0, kW, kH) : Rectangle<int> (x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-        }
-
-        static Outline outline (const Image& im)
-        {
-            Outline o; const int w = im.getWidth(), h = im.getHeight();
-            o.l.assign ((size_t) h, -1.0f); o.r.assign ((size_t) h, -1.0f);
-            const Image::BitmapData bd (im, Image::BitmapData::readOnly);
-            o.top = h; o.bottom = -1;
-            for (int y = 0; y < h; ++y)
-            {
-                int a = -1, b = -1;
-                for (int x = 0; x < w; ++x) if (bd.getPixelColour (x, y).getAlpha() > 6) { if (a < 0) a = x; b = x; }
-                if (a >= 0) { o.l[(size_t) y] = (float) a; o.r[(size_t) y] = (float) b; o.top = jmin (o.top, y); o.bottom = jmax (o.bottom, y); }
-            }
-            if (o.bottom < 0) { o.top = 0; o.bottom = h - 1; for (int y = 0; y < h; ++y) { o.l[(size_t) y] = 0; o.r[(size_t) y] = (float) (w - 1); } }
-            // lignes vides au milieu (trous) : reprend la ligne précédente
-            for (int y = o.top + 1; y <= o.bottom; ++y)
-                if (o.l[(size_t) y] < 0) { o.l[(size_t) y] = o.l[(size_t) y - 1]; o.r[(size_t) y] = o.r[(size_t) y - 1]; }
-            return o;
-        }
-
-        static PixelARGB sample (const Image::BitmapData& bd, int w, int h, float x, float y)
-        {
-            x = jlimit (0.0f, (float) w - 1.001f, x); y = jlimit (0.0f, (float) h - 1.001f, y);
-            const int x0 = (int) x, y0 = (int) y;
-            const float fx = x - (float) x0, fy = y - (float) y0;
-            auto px = [&] (int xx, int yy) { return *(const PixelARGB*) bd.getPixelPointer (xx, yy); };
-            const PixelARGB a = px (x0, y0), b = px (x0 + 1, y0), c = px (x0, y0 + 1), d = px (x0 + 1, y0 + 1);
-            auto mix = [&] (int ca, int cb, int cc, int cd)
-            {
-                const float t = (float) ca + ((float) cb - (float) ca) * fx, u = (float) cc + ((float) cd - (float) cc) * fx;
-                return (uint8) jlimit (0, 255, roundToInt (t + (u - t) * fy));
-            };
-            PixelARGB o;
-            o.setARGB (mix (a.getAlpha(), b.getAlpha(), c.getAlpha(), d.getAlpha()), mix (a.getRed(), b.getRed(), c.getRed(), d.getRed()),
-                       mix (a.getGreen(), b.getGreen(), c.getGreen(), d.getGreen()), mix (a.getBlue(), b.getBlue(), c.getBlue(), d.getBlue()));
-            return o;
-        }
-
         Image build (float t) const
         {
-            const int w = su.getWidth(), h = su.getHeight();
-            Image out (Image::ARGB, w, h, true);
-            const Image::BitmapData bu (su, Image::BitmapData::readOnly), bd (sd, Image::BitmapData::readOnly);
-            Image::BitmapData bo (out, Image::BitmapData::writeOnly);
-            const float topT = (float) ou.top + (float) (od.top - ou.top) * t;
-            const float botT = (float) ou.bottom + (float) (od.bottom - ou.bottom) * t;
-            const float spanT = jmax (1.0f, botT - topT);
-            for (int y = jmax (0, (int) std::floor (topT)); y <= jmin (h - 1, (int) std::ceil (botT)); ++y)
+            const int w = src.getWidth(), h = src.getHeight();
+            const double sx = (double) w / box.getWidth(), sy = (double) h / box.getHeight();
+            auto loc = [&] (double x, double y) { return Point<double> ((x - box.getX()) * sx, (y - box.getY()) * sy); };
+            const double cx = 0.5 * (kPlateL + kPlateR), lift = 1.0 - t;
+            const double wid = 1.0 + (kWiden - 1.0) * lift, rise = kRise * lift;
+            const Point<double> srcQ[4] = { loc (kPlateL, kPlateTop), loc (kPlateR, kPlateTop), loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
+            const Point<double> dstQ[4] = { loc (cx - (cx - kPlateL) * wid, kPlateTop - rise), loc (cx + (kPlateR - cx) * wid, kPlateTop - rise),
+                                            loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
+            Image plate (Image::ARGB, w, h, true);
+            Homography H;
+            if (lift < 1.0e-4 || ! H.solve (dstQ, srcQ)) plate = src.createCopy();
+            else
             {
-                const float v = jlimit (0.0f, 1.0f, ((float) y - topT) / spanT);
-                const float yu = (float) ou.top + v * (float) (ou.bottom - ou.top);
-                const float yd = (float) od.top + v * (float) (od.bottom - od.top);
-                const int ru = jlimit (0, h - 1, roundToInt (yu)), rd = jlimit (0, h - 1, roundToInt (yd));
-                const float lu = ou.l[(size_t) ru], rru = ou.r[(size_t) ru], ld = od.l[(size_t) rd], rrd = od.r[(size_t) rd];
-                if (lu < 0 && ld < 0) continue;
-                const float lt = lu + (ld - lu) * t, rt = rru + (rrd - rru) * t, wt = jmax (1.0f, rt - lt);
-                for (int x = jmax (0, (int) std::floor (lt) - 1); x <= jmin (w - 1, (int) std::ceil (rt) + 1); ++x)
+                const Image::BitmapData bs (src, Image::BitmapData::readOnly);
+                Image::BitmapData bo (plate, Image::BitmapData::writeOnly);
+                const double topY = dstQ[0].y, botY = dstQ[3].y;
+                for (int y = 0; y < h; ++y)
                 {
-                    const float uh = ((float) x - lt) / wt;
-                    const PixelARGB cu = sample (bu, w, h, lu + uh * (rru - lu), yu);
-                    const PixelARGB cd = sample (bd, w, h, ld + uh * (rrd - ld), yd);
-                    auto m = [t] (uint8 a, uint8 b) { return (uint8) jlimit (0, 255, roundToInt ((float) a + ((float) b - (float) a) * t)); };
-                    PixelARGB o;
-                    o.setARGB (m (cu.getAlpha(), cd.getAlpha()), m (cu.getRed(), cd.getRed()), m (cu.getGreen(), cd.getGreen()), m (cu.getBlue(), cd.getBlue()));
-                    *(PixelARGB*) bo.getPixelPointer (x, y) = o;
+                    // la partie avant, inclinée vers la lumière (en haut à gauche), s'éclaircit un peu
+                    const double gy = jlimit (0.0, 1.0, (botY - (double) y) / jmax (1.0, botY - topY));
+                    const float gain = (float) (1.0 + 0.10 * lift * std::pow (gy, 1.5));
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const auto q = H.map (x + 0.5, y + 0.5);
+                        const double u = q.x - 0.5, v = q.y - 0.5;
+                        if (u < -1.0 || v < -1.0 || u > w || v > h) continue;
+                        *(PixelARGB*) bo.getPixelPointer (x, y) = sample (bs, w, h, (float) u, (float) v, gain);
+                    }
                 }
+            }
+            if (lift < 1.0e-4) return plate;
+            // ombre portée sous la pointe levée (lumière en haut à gauche -> ombre vers la droite / le bas)
+            const int ox = roundToInt (8.0 * sx * lift), oy = roundToInt (11.0 * sy * lift), rad = jmax (1, roundToInt (6.0 * sx));
+            std::vector<float> sh ((size_t) (w * h), 0.0f), tmp ((size_t) (w * h), 0.0f);
+            {
+                const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const int xs = x - ox, ys = y - oy;
+                        if (xs >= 0 && ys >= 0 && xs < w && ys < h)
+                            sh[(size_t) (y * w + x)] = (float) ((const PixelARGB*) bp.getPixelPointer (xs, ys))->getAlpha() / 255.0f;
+                    }
+            }
+            const float norm = 1.0f / (float) (2 * rad + 1);
+            for (int pass = 0; pass < 2; ++pass)      // flou boîte séparable, 2 passes (~ gaussien)
+            {
+                for (int y = 0; y < h; ++y)
+                {
+                    float acc = 0.0f;
+                    for (int x = -rad; x < w + rad; ++x)
+                    {
+                        if (x + rad < w) acc += sh[(size_t) (y * w + x + rad)];
+                        if (x - rad - 1 >= 0) acc -= sh[(size_t) (y * w + x - rad - 1)];
+                        if (x >= 0 && x < w) tmp[(size_t) (y * w + x)] = acc * norm;
+                    }
+                }
+                for (int x = 0; x < w; ++x)
+                {
+                    float acc = 0.0f;
+                    for (int y = -rad; y < h + rad; ++y)
+                    {
+                        if (y + rad < h) acc += tmp[(size_t) ((y + rad) * w + x)];
+                        if (y - rad - 1 >= 0) acc -= tmp[(size_t) ((y - rad - 1) * w + x)];
+                        if (y >= 0 && y < h) sh[(size_t) (y * w + x)] = acc * norm;
+                    }
+                }
+            }
+            Image out (Image::ARGB, w, h, true);
+            {
+                const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
+                Image::BitmapData bo (out, Image::BitmapData::writeOnly);
+                const float strength = (float) (0.55 * lift);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const PixelARGB pp = *(const PixelARGB*) bp.getPixelPointer (x, y);
+                        const float pa = (float) pp.getAlpha() / 255.0f;
+                        const float sa = sh[(size_t) (y * w + x)] * strength * (1.0f - pa);
+                        PixelARGB o;   // prémultiplié : l'ombre noire n'ajoute que de l'alpha
+                        o.setARGB ((uint8) jlimit (0, 255, roundToInt ((pa + sa) * 255.0f)), pp.getRed(), pp.getGreen(), pp.getBlue());
+                        *(PixelARGB*) bo.getPixelPointer (x, y) = o;
+                    }
             }
             return out;
         }
 
-        Image up, down, su, sd;
-        Outline ou, od;
+        static PixelARGB sample (const Image::BitmapData& bd, int w, int h, float x, float y, float gain)
+        {
+            const int x0 = (int) std::floor (x), y0 = (int) std::floor (y);
+            const float fx = x - (float) x0, fy = y - (float) y0;
+            auto px = [&] (int xx, int yy) -> PixelARGB
+            {
+                if (xx < 0 || yy < 0 || xx >= w || yy >= h) { PixelARGB z; z.setARGB (0, 0, 0, 0); return z; }
+                return *(const PixelARGB*) bd.getPixelPointer (xx, yy);
+            };
+            const PixelARGB a = px (x0, y0), b = px (x0 + 1, y0), c = px (x0, y0 + 1), d = px (x0 + 1, y0 + 1);
+            auto mix = [&] (int ca, int cb, int cc, int cd, float k)
+            {
+                const float t = (float) ca + ((float) cb - (float) ca) * fx, u = (float) cc + ((float) cd - (float) cc) * fx;
+                return (uint8) jlimit (0, 255, roundToInt ((t + (u - t) * fy) * k));
+            };
+            PixelARGB o;   // pixels prémultipliés : la couleur ne peut pas dépasser l'alpha
+            const uint8 al = mix (a.getAlpha(), b.getAlpha(), c.getAlpha(), d.getAlpha(), 1.0f);
+            o.setARGB (al, jmin (al, mix (a.getRed(), b.getRed(), c.getRed(), d.getRed(), gain)),
+                       jmin (al, mix (a.getGreen(), b.getGreen(), c.getGreen(), d.getGreen(), gain)),
+                       jmin (al, mix (a.getBlue(), b.getBlue(), c.getBlue(), d.getBlue(), gain)));
+            return o;
+        }
+
+        Image down, src;
         Rectangle<int> box { 0, 0, kW, kH };
         float scale = -1.0f;
         std::array<Image, kFrames> frames;
@@ -186,21 +258,6 @@ namespace
         ed->setScaleIndex (r == 904 ? -1 : r - 901);
     }
 
-    struct PresetLook : public LookAndFeel_V4
-    {
-        PresetLook()
-        {
-            setColour (ComboBox::backgroundColourId, Colour (0xff141214));
-            setColour (ComboBox::textColourId, kText);
-            setColour (ComboBox::outlineColourId, Colour (0xff5a1a1c));
-            setColour (ComboBox::arrowColourId, kOrange);
-            setColour (PopupMenu::backgroundColourId, Colour (0xff1a1718));
-            setColour (PopupMenu::textColourId, kText);
-            setColour (PopupMenu::highlightedBackgroundColourId, Colour (0xff7a1218));
-            setColour (PopupMenu::headerTextColourId, kOrange);
-        }
-        Font getComboBoxFont (ComboBox& b) override { return Font (FontOptions (jmax (10.0f, (float) b.getHeight() * 0.52f), Font::bold)); }
-    };
 }
 
 //==============================================================================
@@ -209,44 +266,19 @@ class PedalView : public Component, private Timer
 public:
     explicit PedalView (WharryProcessor& p) : proc (p)
     {
-        bg.src     = loadPng (BinaryData::background_png, BinaryData::background_pngSize);
-        cap.src    = loadPng (BinaryData::cap_big_png, BinaryData::cap_big_pngSize);
-        fsL.src    = loadPng (BinaryData::cap_fsL_png, BinaryData::cap_fsL_pngSize);
-        fsR.src    = loadPng (BinaryData::cap_fsR_png, BinaryData::cap_fsR_pngSize);
-        ledOnR.src = loadPng (BinaryData::led_r_on_png, BinaryData::led_r_on_pngSize);
-        ledOffR.src= loadPng (BinaryData::led_r_off_png, BinaryData::led_r_off_pngSize);
-        ledOnO.src = loadPng (BinaryData::led_p_on_png, BinaryData::led_p_on_pngSize);
-        ledOffO.src= loadPng (BinaryData::led_p_off_png, BinaryData::led_p_off_pngSize);
-        ledOnS.src = loadPng (BinaryData::led_s_on_png, BinaryData::led_s_on_pngSize);
-        ledOffS.src= loadPng (BinaryData::led_s_off_png, BinaryData::led_s_off_pngSize);
-        treadle.setSources (loadPng (BinaryData::treadle_up_png, BinaryData::treadle_up_pngSize),
-                            loadPng (BinaryData::treadle_down_png, BinaryData::treadle_down_pngSize));
-
-        presetBox.setLookAndFeel (&look);
-        presetBox.addSectionHeading ("Whammy programs");
-        for (int i = 0; i < wharry::kNumPrograms; ++i) presetBox.addItem (wharry::program (i).name, 1 + i);
-        presetBox.addSectionHeading ("Studio Wiga factory presets");
-        for (int i = 0; i < WharryProcessor::kNumFactory; ++i) presetBox.addItem (WharryProcessor::factory (i).name, 101 + i);
-        presetBox.onChange = [this]
-        {
-            const int id = presetBox.getSelectedId();
-            if (id >= 101) { shownFactory = id - 101; proc.loadFactory (id - 101); }
-            else if (id >= 1) { shownFactory = -1; proc.selectWhammyProgram (id - 1); }
-        };
-        addAndMakeVisible (presetBox);
-        syncPresetBox (true);
-
-        setOpaque (false);
+        bg.src      = loadPng (BinaryData::background_png, BinaryData::background_pngSize);
+        fsOn.src    = loadPng (BinaryData::fs_on_png, BinaryData::fs_on_pngSize);
+        fsOff.src   = loadPng (BinaryData::fs_off_png, BinaryData::fs_off_pngSize);
+        tgL.src     = loadPng (BinaryData::toggle_l_png, BinaryData::toggle_l_pngSize);
+        tgR.src     = loadPng (BinaryData::toggle_r_png, BinaryData::toggle_r_pngSize);
+        treadle.setSource (loadPng (BinaryData::treadle_down_png, BinaryData::treadle_down_pngSize));
+        typeface = Typeface::createSystemTypefaceFor (BinaryData::PoppinsMedium_ttf, BinaryData::PoppinsMedium_ttfSize);
+        typefaceBold = Typeface::createSystemTypefaceFor (BinaryData::PoppinsBold_ttf, BinaryData::PoppinsBold_ttfSize);
+        setOpaque (true);
         startTimerHz (30);
     }
-    ~PedalView() override { presetBox.setLookAndFeel (nullptr); }
 
-    void resized() override
-    {
-        s = (float) getWidth() / (float) kW;
-        presetBox.setBounds (r (kPresetBox).toNearestInt());
-        repaint();
-    }
+    void resized() override { s = (float) getWidth() / (float) kW; repaint(); }
 
     void paint (Graphics& g) override
     {
@@ -255,7 +287,7 @@ public:
 
         // ---- plateau (deux positions voisines fondues -> mouvement continu) ----
         treadle.prepare (ps);
-        const float fpos = drawnPedal * (float) (kFrames - 1);
+        const float fpos = jlimit (0.0f, 1.0f, drawnPedal) * (float) (kFrames - 1);
         const int f0 = jlimit (0, kFrames - 1, (int) std::floor (fpos)), f1 = jmin (kFrames - 1, f0 + 1);
         const float fr = fpos - (float) f0;
         const auto tb = r (treadle.designBounds().toFloat());
@@ -263,39 +295,49 @@ public:
         g.drawImage (treadle.frame (f0), tb);
         if (fr > 0.02f && f1 != f0) { g.setOpacity (fr); g.drawImage (treadle.frame (f1), tb); g.setOpacity (1.0f); }
 
-        // ---- sélecteur : chapeau fixe (lumière fixe), seul le repère tourne ----
-        const auto& capImg = cap.get (ps * (2.0f * kKnobR) / (float) cap.src.getWidth());
-        g.drawImage (capImg, r ({ kKnobX - kKnobR, kKnobY - kKnobR, 2.0f * kKnobR, 2.0f * kKnobR }));
-        const float ang = degreesToRadians (-kKnobArc + 2.0f * kKnobArc * (float) drawnProgram / (float) (wharry::kNumPrograms - 1));
-        const Point<float> c = r (Point<float> (kKnobX, kKnobY));
-        const Point<float> a = c + Point<float> (std::sin (ang), -std::cos (ang)) * (kKnobR * 0.30f * s);
-        const Point<float> b = c + Point<float> (std::sin (ang), -std::cos (ang)) * (kKnobR * 0.82f * s);
-        g.setColour (Colours::black.withAlpha (0.45f)); g.drawLine ({ a.translated (1.2f * s, 1.6f * s), b.translated (1.2f * s, 1.6f * s) }, 6.0f * s);
-        g.setColour (Colour (0xfff7f4ef)); g.drawLine ({ a, b }, 4.5f * s);
-
-        // ---- LED des programmes ----
-        for (int i = 0; i < wharry::kNumPrograms; ++i)
-            drawLed (g, i == drawnProgram && drawnActive ? ledOnS : ledOffS, ledOffS, progLed (i), 0.42f, i == drawnProgram ? (drawnActive ? 1.0f : 0.35f) : 0.0f, kOrange);
-
-        // ---- inverseur CLASSIC / CHORDS ----
+        // ---- sélecteur : le chapeau laiton reste fixe (reflets), seul le repère gravé tourne vers la LED choisie ----
         {
-            const auto sw = r (kSwitch);
-            const float lx = drawnChords ? sw.getRight() - sw.getHeight() * 0.5f : sw.getX() + sw.getHeight() * 0.5f;
-            const float rad = sw.getHeight() * 0.42f;
-            g.setColour (Colours::black.withAlpha (0.5f)); g.fillEllipse (lx - rad + 1.5f * s, sw.getCentreY() - rad + 2.0f * s, 2 * rad, 2 * rad);
-            ColourGradient cg (Colour (0xfff4f4f4), lx - rad * 0.4f, sw.getCentreY() - rad * 0.6f, Colour (0xff6c6c70), lx + rad, sw.getCentreY() + rad, true);
-            g.setGradientFill (cg); g.fillEllipse (lx - rad, sw.getCentreY() - rad, 2 * rad, 2 * rad);
+            const float ang = knobAngle (drawnProgram);
+            const Point<float> dir (std::sin (ang), -std::cos (ang));
+            const auto c = r (kKnob);
+            const auto a = c + dir * (kCapR * 0.30f * s), b = c + dir * (kCapR * 0.86f * s);
+            g.setColour (Colours::white.withAlpha (0.5f)); g.drawLine ({ a.translated (-0.8f * s, -0.8f * s), b.translated (-0.8f * s, -0.8f * s) }, 2.4f * s);
+            g.setColour (Colour (0xe0201a1a)); g.drawLine ({ a, b }, 3.2f * s);
         }
 
-        // ---- footswitchs et leurs LED ----
-        drawFootswitch (g, fsL, kFsLX, pressedL);
-        drawFootswitch (g, fsR, kFsRX, pressedR);
-        drawLed (g, ledOnO, ledOffO, { kLedLX, kLedY }, 0.8f, drawnChords ? 1.0f : 0.0f, kOrange);
-        drawLed (g, ledOnR, ledOffR, { kLedRX, kLedY }, 0.8f, drawnActive ? 1.0f : 0.0f, kRed);
+        // ---- LED des 21 programmes ----
+        for (int i = 0; i < wharry::kNumPrograms; ++i)
+            drawLed (g, kLed[i], i == drawnProgram ? (drawnActive ? 1.0f : 0.3f) : 0.0f);
+
+        // ---- GLIDE / TONE / MIX ----
+        for (int i = 0; i < 3; ++i)
+        {
+            const float ang = degreesToRadians (-135.0f + 270.0f * drawnSmall[i]);
+            const Point<float> dir (std::sin (ang), -std::cos (ang));
+            const auto c = r (kSmall[i]);
+            // repère gravé sur le chapeau alu (reflets fixes)
+            g.setColour (Colours::white.withAlpha (0.45f));
+            g.drawLine ({ c + dir * (kSmallCapR * 0.30f * s) + Point<float> (-0.7f, -0.7f) * s, c + dir * (kSmallCapR * 0.90f * s) + Point<float> (-0.7f, -0.7f) * s }, 2.0f * s);
+            g.setColour (Colour (0xe0201a1a));
+            g.drawLine ({ c + dir * (kSmallCapR * 0.30f * s), c + dir * (kSmallCapR * 0.90f * s) }, 2.6f * s);
+        }
+
+        // ---- inverseur CLASSIC / CHORDS ----
+        g.drawImage ((drawnChords ? tgR : tgL).get (ps), r (kToggle));
+
+        // ---- footswitch + LED ----
+        {
+            auto fr2 = r (kFs);
+            if (pressed) fr2 = fr2.withSizeKeepingCentre (fr2.getWidth() * 0.965f, fr2.getHeight() * 0.965f).translated (0, 1.5f * s);
+            g.drawImage ((drawnActive ? fsOn : fsOff).get (ps), fr2);
+            drawLed (g, kFsLed, drawnActive ? 1.0f : 0.0f);
+        }
+
+        drawScreen (g);
 
         // ---- ligne d'état ----
-        g.setColour (kText);
-        g.setFont (Font (FontOptions (15.0f * s, Font::bold)));
+        g.setColour (kInk);
+        g.setFont (Font (FontOptions (typeface).withHeight (17.0f * s)));
         g.drawFittedText (drawnStatus, r (kStatus).toNearestInt(), Justification::centred, 1);
     }
 
@@ -305,15 +347,22 @@ public:
         const auto p = e.position / s;
         if (e.mods.isPopupMenu()) { showMenu (p); return; }
         drag = Drag::None;
-        if (p.getDistanceFrom ({ kKnobX, kKnobY }) < kKnobR * 1.1f) { drag = Drag::Knob; dragStartY = p.y; dragStartProg = currentProgram(); return; }
-        for (int i = 0; i < wharry::kNumPrograms; ++i) if (progLabel (i).contains (p)) { proc.selectWhammyProgram (i); return; }
-        if (kSwitchHit.contains (p)) { proc.togglePedalSwitch ("chords"); return; }
-        if (p.getDistanceFrom ({ kFsLX, kFsY }) < 52.0f) { pressedL = true; proc.togglePedalSwitch ("chords"); repaint (fsArea (kFsLX)); return; }
-        if (p.getDistanceFrom ({ kFsRX, kFsY }) < 52.0f) { pressedR = true; proc.togglePedalSwitch ("active"); repaint (fsArea (kFsRX)); return; }
-        if (treadle.designBounds().toFloat().contains (p))
+        if (kScreen.contains (p)) { showPresetMenu(); return; }
+        if (p.getDistanceFrom (kKnob) < kKnobR) { drag = Drag::Knob; dragStartY = p.y; dragStartProg = currentProgram(); return; }
+        for (int i = 0; i < wharry::kNumPrograms; ++i) if (p.getDistanceFrom (kLed[i]) < 11.0f) { proc.selectWhammyProgram (i); return; }
+        for (int i = 0; i < 3; ++i)
+            if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f)
+            {
+                drag = (Drag) ((int) Drag::Small0 + i); dragStartY = p.y;
+                if (auto* par = proc.apvts.getParameter (kSmallId[i])) { dragStartVal = par->getValue(); par->beginChangeGesture(); }
+                return;
+            }
+        if (kToggleHit.contains (p)) { proc.togglePedalSwitch ("chords"); return; }
+        if (kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.45f) { pressed = true; proc.togglePedalSwitch ("active"); repaint (r (kFs).toNearestInt().expanded (4)); return; }
+        if (kPlate.contains (p))
         {
             drag = Drag::Pedal; dragStartY = p.y;
-            dragStartPedal = proc.apvts.getRawParameterValue ("pedal")->load();
+            dragStartVal = proc.apvts.getRawParameterValue ("pedal")->load();
             if (auto* par = proc.apvts.getParameter ("pedal")) par->beginChangeGesture();
         }
     }
@@ -323,48 +372,59 @@ public:
         const auto p = e.position / s;
         if (drag == Drag::Knob)
         {
-            const int step = (int) std::lround ((dragStartY - p.y) / 16.0f);
-            const int np = jlimit (0, wharry::kNumPrograms - 1, dragStartProg + step);
+            const int np = jlimit (0, wharry::kNumPrograms - 1, dragStartProg + (int) std::lround ((dragStartY - p.y) / 14.0f));
             if (np != currentProgram()) proc.selectWhammyProgram (np);
         }
         else if (drag == Drag::Pedal)
         {
             // tirer vers le bas = appuyer sur la pointe (orteil enfoncé)
-            const float span = (float) treadle.designBounds().getHeight() * 0.8f;
-            const float v = jlimit (0.0f, 1.0f, dragStartPedal + (p.y - dragStartY) / span);
+            const float v = jlimit (0.0f, 1.0f, dragStartVal + (p.y - dragStartY) / (kPlate.getHeight() * 0.7f));
             if (auto* par = proc.apvts.getParameter ("pedal")) par->setValueNotifyingHost (v);
+        }
+        else if (drag >= Drag::Small0)
+        {
+            const float v = jlimit (0.0f, 1.0f, dragStartVal + (dragStartY - p.y) / 220.0f);
+            if (auto* par = proc.apvts.getParameter (kSmallId[(int) drag - (int) Drag::Small0])) par->setValueNotifyingHost (v);
         }
     }
 
     void mouseUp (const MouseEvent&) override
     {
         if (drag == Drag::Pedal) if (auto* par = proc.apvts.getParameter ("pedal")) par->endChangeGesture();
+        if (drag >= Drag::Small0) if (auto* par = proc.apvts.getParameter (kSmallId[(int) drag - (int) Drag::Small0])) par->endChangeGesture();
         drag = Drag::None;
-        if (pressedL || pressedR) { pressedL = pressedR = false; repaint (fsArea (kFsLX)); repaint (fsArea (kFsRX)); }
+        if (pressed) { pressed = false; repaint (r (kFs).toNearestInt().expanded (4)); }
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
         const auto p = e.position / s;
-        if (treadle.designBounds().toFloat().contains (p))          // double-clic : pédale tout en haut / tout en bas
+        if (kPlate.contains (p))              // double-clic sur le plateau : tout en haut / tout en bas
             proc.setParamValue ("pedal", proc.apvts.getRawParameterValue ("pedal")->load() > 0.5f ? 0.0f : 1.0f);
+        for (int i = 0; i < 3; ++i)           // double-clic sur un bouton : valeur par défaut
+            if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f)
+                if (auto* par = proc.apvts.getParameter (kSmallId[i])) { par->beginChangeGesture(); par->setValueNotifyingHost (par->getDefaultValue()); par->endChangeGesture(); }
     }
 
     void mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w) override
     {
         const auto p = e.position / s;
-        if (p.getDistanceFrom ({ kKnobX, kKnobY }) < kKnobR * 1.2f)
+        if (p.getDistanceFrom (kKnob) < kKnobR)
             proc.selectWhammyProgram (jlimit (0, wharry::kNumPrograms - 1, currentProgram() + (w.deltaY > 0 ? 1 : -1)));
-        else if (treadle.designBounds().toFloat().contains (p))
+        else if (kPlate.contains (p))
             proc.setParamValue ("pedal", jlimit (0.0f, 1.0f, proc.apvts.getRawParameterValue ("pedal")->load() - w.deltaY * 0.25f));
+        else
+            for (int i = 0; i < 3; ++i)
+                if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f)
+                    if (auto* par = proc.apvts.getParameter (kSmallId[i]))
+                    { par->beginChangeGesture(); par->setValueNotifyingHost (jlimit (0.0f, 1.0f, par->getValue() + w.deltaY * 0.1f)); par->endChangeGesture(); }
     }
 
 private:
-    enum class Drag { None, Knob, Pedal };
+    enum class Drag { None, Knob, Pedal, Small0, Small1, Small2 };
 
     Rectangle<float> r (Rectangle<float> d) const { return d * s; }
     Point<float> r (Point<float> d) const { return d * s; }
-    Rectangle<int> fsArea (float x) const { return r (Rectangle<float> (x - 60.0f, kFsY - 60.0f, 120.0f, 120.0f)).toNearestInt().expanded (2); }
     float physScale() const
     {
         if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) return jmax (1.0f, (float) d->scale);
@@ -372,58 +432,109 @@ private:
     }
     int currentProgram() const { return jlimit (0, wharry::kNumPrograms - 1, (int) std::lround (proc.apvts.getRawParameterValue ("program")->load())); }
     bool param (const char* id) const { return proc.apvts.getRawParameterValue (id)->load() > 0.5f; }
-
-    void drawLed (Graphics& g, ScaledCache& on, ScaledCache& off, Point<float> c, float sc, float level, Colour glow)
+    static float knobAngle (int prog)
     {
-        const float ps = s * physScale();
-        const auto& o = off.get (ps * sc);
-        const float w = (float) off.src.getWidth() * sc * s, h = (float) off.src.getHeight() * sc * s;
-        const Rectangle<float> rr (c.x * s - w * 0.5f, c.y * s - h * 0.5f, w, h);
+        prog = jlimit (0, wharry::kNumPrograms - 1, prog);
+        const auto d = kLed[prog] - kKnob;
+        return std::atan2 (d.x, -d.y);
+    }
+
+    // LED : bille grise éteinte, cœur blanc chaud + halo ambré allumée
+    void drawLed (Graphics& g, Point<float> c0, float level)
+    {
+        const auto c = r (c0);
+        const float rr = kLedR * s;
+        g.setGradientFill (ColourGradient (Colour (0xff6b6466), c.x - rr * 0.35f, c.y - rr * 0.4f, Colour (0xff141011), c.x + rr, c.y + rr, true));
+        g.fillEllipse (c.x - rr, c.y - rr, 2 * rr, 2 * rr);
         if (level > 0.01f)
         {
-            g.setGradientFill (ColourGradient (glow.withAlpha (0.35f * level), c * s, glow.withAlpha (0.0f), c * s + Point<float> (w * 1.2f, 0), true));
-            g.fillEllipse (rr.expanded (w * 0.7f));
+            g.setGradientFill (ColourGradient (kWarm.withAlpha (0.55f * level), c.x, c.y, kWarm.withAlpha (0.0f), c.x + rr * 3.6f, c.y, true));
+            g.fillEllipse (c.x - rr * 3.6f, c.y - rr * 3.6f, rr * 7.2f, rr * 7.2f);
+            g.setGradientFill (ColourGradient (Colour (0xfffff8ea).withAlpha (level), c.x, c.y, kWarm.withAlpha (level), c.x + rr, c.y, true));
+            g.fillEllipse (c.x - rr * 0.95f, c.y - rr * 0.95f, rr * 1.9f, rr * 1.9f);
         }
-        g.drawImage (o, rr);
-        if (level > 0.01f) { g.setOpacity (level); g.drawImage (on.get (ps * sc), rr); g.setOpacity (1.0f); }
     }
 
-    void drawFootswitch (Graphics& g, ScaledCache& img, float x, bool pressed)
+    // écran : mode, courbe intervalle / course de pédale, nom du programme, décalage, barres de position
+    void drawScreen (Graphics& g)
     {
-        const float sc = kFsScale * (pressed ? 0.95f : 1.0f);
-        const float w = (float) img.src.getWidth() * sc, h = (float) img.src.getHeight() * sc;
-        g.drawImage (img.get (s * physScale() * sc), r ({ x - w * 0.5f, kFsY - h * 0.5f + (pressed ? 2.0f : 0.0f), w, h }));
+        const auto sc = r (kScreen).reduced (3.0f * s);
+        g.setColour (kScreenBg); g.fillRoundedRectangle (sc, 4.0f * s);
+        const auto& pr = wharry::program (drawnProgram);
+        const float pad = 7.0f * s;
+        auto area = sc.reduced (pad);
+        const float fh = sc.getHeight();
+
+        g.setFont (Font (FontOptions (typefaceBold).withHeight (fh * 0.075f)));
+        g.setColour (kCyan.withAlpha (drawnActive ? 0.85f : 0.35f));
+        auto top = area.removeFromTop (fh * 0.09f);
+        g.drawText (drawnChords ? (param ("studio") ? "CHORDS HQ" : "CHORDS") : "CLASSIC", top, Justification::centredLeft);
+        g.drawText (drawnActive ? "ON" : "BYPASS", top, Justification::centredRight);
+
+        // courbe : intervalle en fonction de la course (Whammy / Harmony), niveau de la voix (Detune)
+        auto graph = area.removeFromTop (fh * 0.36f).reduced (0, fh * 0.03f);
+        g.setColour (kCyan.withAlpha (0.15f));
+        g.drawHorizontalLine ((int) graph.getCentreY(), graph.getX(), graph.getRight());
+        float lo = jmin (pr.up, pr.down, 0.0f), hi = jmax (pr.up, pr.down, 0.0f);
+        if (pr.type == wharry::Detune) { lo = 0.0f; hi = 1.0f; }
+        if (hi - lo < 1.0f) hi = lo + 1.0f;
+        auto mapY = [&] (float v) { return graph.getBottom() - (v - lo) / (hi - lo) * graph.getHeight(); };
+        Path curve;
+        for (int i = 0; i <= 24; ++i)
+        {
+            const float t = (float) i / 24.0f;
+            const float v = pr.type == wharry::Detune ? t : pr.up + (pr.down - pr.up) * t;
+            const Point<float> q (graph.getX() + t * graph.getWidth(), mapY (v));
+            if (i == 0) curve.startNewSubPath (q); else curve.lineTo (q);
+        }
+        const float alpha = drawnActive ? 1.0f : 0.4f;
+        g.setColour (kCyan.withAlpha (0.25f * alpha)); g.strokePath (curve, PathStrokeType (4.0f * s));
+        g.setColour (kCyan.withAlpha (alpha));         g.strokePath (curve, PathStrokeType (1.6f * s));
+        const float tp = jlimit (0.0f, 1.0f, drawnPedal);
+        const float vNow = pr.type == wharry::Detune ? tp : pr.up + (pr.down - pr.up) * tp;
+        const Point<float> dot (graph.getX() + tp * graph.getWidth(), mapY (vNow));
+        g.setColour (Colours::white.withAlpha (alpha)); g.fillEllipse (dot.x - 3.2f * s, dot.y - 3.2f * s, 6.4f * s, 6.4f * s);
+
+        // nom du programme + décalage courant
+        g.setColour (Colour (0xffe8fbff).withAlpha (alpha));
+        g.setFont (Font (FontOptions (typefaceBold).withHeight (fh * 0.13f)));
+        g.drawFittedText (pr.label, area.removeFromTop (fh * 0.17f).toNearestInt(), Justification::centred, 1, 0.6f);
+        g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.085f)));
+        String val;
+        if (pr.type == wharry::Detune) val = String (roundToInt (pr.up)) + " cents";
+        else { const float sm = drawnSemis; val = (sm >= 0.0f ? "+" : "") + String (sm, 1) + " st"; }
+        g.setColour (kCyan.withAlpha (0.9f * alpha));
+        g.drawText (val, area.removeFromTop (fh * 0.1f), Justification::centred);
+
+        // barres : position de la pédale
+        auto bars = area.reduced (0, fh * 0.015f);
+        const int nb = 14;
+        const float bw = bars.getWidth() / (float) nb;
+        for (int i = 0; i < nb; ++i)
+        {
+            const float t = ((float) i + 0.5f) / (float) nb;
+            const float hgt = bars.getHeight() * (0.25f + 0.75f * std::sin (kPiF * t));
+            const bool lit = t <= tp + 0.001f;
+            g.setColour (kCyan.withAlpha ((lit ? 0.9f : 0.18f) * alpha));
+            g.fillRect (bars.getX() + (float) i * bw + bw * 0.15f, bars.getBottom() - hgt, bw * 0.7f, hgt);
+        }
     }
+    static constexpr float kPiF = 3.14159265f;
 
     String statusText() const
     {
         const auto learn = proc.getLearnTarget();
-        if (learn == MidiTarget::Pedal)   return "MIDI LEARN: move your expression pedal";
-        if (learn == MidiTarget::LeftFsw) return "MIDI LEARN: press the footswitch for CLASSIC / CHORDS";
-        if (learn == MidiTarget::RightFsw)return "MIDI LEARN: press the footswitch for ON / OFF";
+        if (learn == MidiTarget::Pedal)   return "MIDI LEARN : move your expression pedal";
+        if (learn == MidiTarget::LeftFsw) return "MIDI LEARN : press the switch / footswitch for CLASSIC - CHORDS";
+        if (learn == MidiTarget::RightFsw)return "MIDI LEARN : press the footswitch for ON - OFF";
         const auto& pr = wharry::program (currentProgram());
-        String st = String (pr.label) + "   |   " + (param ("chords") ? (param ("studio") ? "CHORDS HQ" : "CHORDS") : "CLASSIC")
-                  + "   |   PEDAL " + String (roundToInt (proc.getPedalShown() * 100.0f)) + " %";
-        if (pr.type == wharry::Detune) st << "   |   DETUNE " << String (roundToInt (pr.up)) << " CENTS";
-        else
-        {
-            const float sm = proc.getSemitones();
-            st << "   |   " << (sm >= 0.0f ? "+" : "") << String (sm, 1) << " ST";
-        }
+        auto pc = [this] (const char* id) { return String (roundToInt (proc.apvts.getParameter (id)->getValue() * 100.0f)) + " %"; };
+        String st = String (pr.label) + "   |   PEDAL " + String (roundToInt (proc.getPedalShown() * 100.0f)) + " %"
+                  + "   |   GLIDE " + String (roundToInt (proc.apvts.getRawParameterValue ("smooth")->load())) + " ms"
+                  + "   |   TONE " + pc ("tone") + "   |   MIX " + pc ("mix");
         if (param ("chords") && param ("studio") && proc.getLatency() > 0)
-            st << "   |   LATENCY " << String (roundToInt (1000.0 * proc.getLatency() / jmax (1.0, proc.getSampleRate()))) << " MS";
-        st << "   |   " << (param ("active") ? "ON" : "BYPASS");
+            st << "   |   LATENCY " << String (roundToInt (1000.0 * proc.getLatency() / jmax (1.0, proc.getSampleRate()))) << " ms";
         return st;
-    }
-
-    void syncPresetBox (bool force)
-    {
-        const int prog = currentProgram();
-        if (! force && prog == shownProgram) return;
-        shownProgram = prog;
-        if (shownFactory >= 0 && WharryProcessor::factory (shownFactory).program == prog)
-            presetBox.setSelectedId (101 + shownFactory, dontSendNotification);
-        else { shownFactory = -1; presetBox.setSelectedId (1 + prog, dontSendNotification); }
     }
 
     void timerCallback() override
@@ -432,45 +543,75 @@ private:
 
         const int prog = currentProgram();
         const bool chords = param ("chords"), active = param ("active");
-        const float ped = proc.getPedalShown();
+        const float ped = proc.getPedalShown(), sm = proc.getSemitones();
         const String st = statusText();
-        syncPresetBox (false);
+        bool screen = false;
 
         if (std::abs (ped - drawnPedal) > 0.002f)
         {
-            drawnPedal = ped;
+            drawnPedal = ped; screen = true;
             repaint (r (treadle.designBounds().toFloat()).toNearestInt().expanded (2));
         }
+        if (std::abs (sm - drawnSemis) > 0.04f) { drawnSemis = sm; screen = true; }
         if (prog != drawnProgram)
         {
-            repaint (r ({ kKnobX - kKnobR - 6, kKnobY - kKnobR - 6, 2 * kKnobR + 12, 2 * kKnobR + 12 }).toNearestInt());
-            for (int i : { prog, drawnProgram }) if (i >= 0) repaint (r (Rectangle<float> (progLed (i).x - 14, progLed (i).y - 14, 28, 28)).toNearestInt());
-            drawnProgram = prog;
+            repaint (r (Rectangle<float> (kKnob.x - kKnobR, kKnob.y - kKnobR, 2 * kKnobR, 2 * kKnobR)).toNearestInt().expanded (2));
+            for (int i : { prog, drawnProgram }) if (i >= 0) repaint (ledArea (kLed[i]));
+            drawnProgram = prog; screen = true;
         }
         if (chords != drawnChords || active != drawnActive)
         {
-            drawnChords = chords; drawnActive = active;
-            repaint (r (kSwitch.expanded (8)).toNearestInt());
-            repaint (r (Rectangle<float> (kLedLX - 50, kLedY - 50, 100, 100)).toNearestInt());
-            repaint (r (Rectangle<float> (kLedRX - 50, kLedY - 50, 100, 100)).toNearestInt());
-            repaint (r (Rectangle<float> (progLed (prog).x - 14, progLed (prog).y - 14, 28, 28)).toNearestInt());
+            drawnChords = chords; drawnActive = active; screen = true;
+            repaint (r (kToggle).toNearestInt().expanded (3));
+            repaint (r (kFs).toNearestInt().expanded (4));
+            repaint (ledArea (kFsLed));
+            repaint (ledArea (kLed[prog]));
         }
+        for (int i = 0; i < 3; ++i)
+        {
+            const float v = proc.apvts.getParameter (kSmallId[i])->getValue();
+            if (std::abs (v - drawnSmall[i]) > 0.002f)
+            {
+                drawnSmall[i] = v;
+                repaint (r (Rectangle<float> (kSmall[i].x - kSmallR, kSmall[i].y - kSmallR, 2 * kSmallR, 2 * kSmallR)).toNearestInt().expanded (2));
+            }
+        }
+        if (screen) repaint (r (kScreen).toNearestInt().expanded (2));
         if (st != drawnStatus) { drawnStatus = st; repaint (r (kStatus).toNearestInt().expanded (2)); }
+    }
+    Rectangle<int> ledArea (Point<float> c) const { const float h = kLedR * 3.8f; return r (Rectangle<float> (c.x - h, c.y - h, 2 * h, 2 * h)).toNearestInt().expanded (1); }
+
+    void showPresetMenu()
+    {
+        PopupMenu m, progs, fac;
+        const int cur = currentProgram();
+        for (int i = 0; i < wharry::kNumPrograms; ++i) progs.addItem (1 + i, wharry::program (i).name, true, i == cur);
+        for (int i = 0; i < WharryProcessor::kNumFactory; ++i) fac.addItem (101 + i, WharryProcessor::factory (i).name);
+        m.addSectionHeader ("Presets");
+        m.addSubMenu ("Whammy programs (original)", progs);
+        m.addSubMenu ("Studio Wiga factory presets", fac);
+        Component::SafePointer<PedalView> sp (this);
+        m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (r (kScreen).toNearestInt())), [sp] (int res)
+        {
+            if (sp == nullptr || res == 0) return;
+            if (res >= 101) sp->proc.loadFactory (res - 101);
+            else sp->proc.selectWhammyProgram (res - 1);
+        });
     }
 
     void showMenu (Point<float> p)
     {
         auto* ed = findParentComponentOfClass<WharryEditor>();
         PopupMenu m;
-        const bool onTreadle = treadle.designBounds().toFloat().contains (p);
-        const bool onLeft = p.getDistanceFrom ({ kFsLX, kFsY }) < 60.0f, onRight = p.getDistanceFrom ({ kFsRX, kFsY }) < 60.0f;
-        if (onLeft || onRight)
+        const bool onFs = kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.6f;
+        const bool onToggle = kToggleHit.contains (p);
+        if (onFs || onToggle)
         {
-            const auto t = onLeft ? MidiTarget::LeftFsw : MidiTarget::RightFsw;
+            const auto t = onToggle ? MidiTarget::LeftFsw : MidiTarget::RightFsw;
             const auto d = proc.getMidiDescription (t);
-            m.addSectionHeader (onLeft ? "CLASSIC / CHORDS footswitch" : "ON / OFF footswitch");
-            m.addItem (onLeft ? 11 : 21, "MIDI learn" + (d.isNotEmpty() ? " (now: " + d + ")" : String()));
-            m.addItem (onLeft ? 12 : 22, "Clear MIDI assignment", d.isNotEmpty());
+            m.addSectionHeader (onToggle ? "CLASSIC / CHORDS switch" : "ON / OFF footswitch");
+            m.addItem (onToggle ? 11 : 21, "MIDI learn" + (d.isNotEmpty() ? " (now: " + d + ")" : String()));
+            m.addItem (onToggle ? 12 : 22, "Clear MIDI assignment", d.isNotEmpty());
             m.addSeparator();
         }
         else
@@ -480,12 +621,6 @@ private:
             m.addItem (32, "Reset to CC 11 (Whammy standard)");
             m.addItem (33, "Invert pedal direction", true, param ("invert"));
             m.addItem (34, "Reset heel / toe calibration");
-            PopupMenu sm;
-            const float cur = proc.apvts.getRawParameterValue ("smooth")->load();
-            int id = 40;
-            for (float v : { 0.0f, 15.0f, 30.0f, 60.0f, 120.0f })
-                sm.addItem (id++, v == 0.0f ? String ("Off") : String (roundToInt (v)) + " ms", true, std::abs (cur - v) < 0.5f);
-            m.addSubMenu ("Pedal smoothing", sm);
             m.addSeparator();
             m.addSectionHeader ("Chords engine");
             m.addItem (51, "Live (no latency)", true, ! param ("studio"));
@@ -493,7 +628,6 @@ private:
             m.addItem (53, "Respond to MIDI Program Change", true, param ("pc"));
             m.addSeparator();
         }
-        ignoreUnused (onTreadle);
         m.addSectionHeader ("Plugin size");
         addSizeItems (m, ed);
 
@@ -515,28 +649,24 @@ private:
                 case 51: pr.setParamValue ("studio", 0.0f); break;
                 case 52: pr.setParamValue ("studio", 1.0f); break;
                 case 53: pr.togglePedalSwitch ("pc"); break;
-                default:
-                    if (res >= 40 && res <= 44) { const float v[5] = { 0, 15, 30, 60, 120 }; pr.setParamValue ("smooth", v[res - 40]); }
-                    else handleSizeChoice (res, sp->findParentComponentOfClass<WharryEditor>());
-                    break;
+                default: handleSizeChoice (res, sp->findParentComponentOfClass<WharryEditor>()); break;
             }
         });
     }
 
     WharryProcessor& proc;
-    PresetLook look;
-    ComboBox presetBox;
-    ScaledCache bg, cap, fsL, fsR, ledOnR, ledOffR, ledOnO, ledOffO, ledOnS, ledOffS;
-    TreadleMorph treadle;
+    ScaledCache bg, fsOn, fsOff, tgL, tgR;
+    TreadleWarp treadle;
+    Typeface::Ptr typeface, typefaceBold;
     float s = kDefaultScale * (float) kRefW / (float) kW;
 
     Drag drag = Drag::None;
-    float dragStartY = 0, dragStartPedal = 0;
+    float dragStartY = 0, dragStartVal = 0;
     int dragStartProg = 0;
-    bool pressedL = false, pressedR = false;
+    bool pressed = false;
 
-    float drawnPedal = -1.0f;
-    int drawnProgram = -1, shownProgram = -1, shownFactory = -1;
+    float drawnPedal = -1.0f, drawnSemis = 0.0f, drawnSmall[3] = { -1.0f, -1.0f, -1.0f };
+    int drawnProgram = -1;
     bool drawnChords = false, drawnActive = true;
     String drawnStatus;
 };

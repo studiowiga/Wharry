@@ -7,21 +7,21 @@ using namespace juce;
 const FactoryPreset& WharryProcessor::factory (int i)
 {
     static const FactoryPreset f[kNumFactory] = {
-        //  nom                                programme  chords studio  lissage  sec   effet
-        { "Octave Scream (2 Oct Up)",           0,  false, false,  20.0f, 1.0f, 1.0f },
-        { "Classic Octave Up",                  1,  false, false,  25.0f, 1.0f, 1.0f },
-        { "Power Fifth Rise",                   2,  true,  false,  30.0f, 1.0f, 1.0f },
-        { "Half-Step Drop (2nd Dn chords)",     4,  true,  false,  40.0f, 1.0f, 1.0f },
-        { "Seven-String Sub (Oct Dn chords)",   7,  true,  false,  30.0f, 1.0f, 1.0f },
-        { "Doom Floor (2 Oct Dn chords)",       8,  true,  false,  45.0f, 1.0f, 1.0f },
-        { "Dive Bomb",                          9,  false, false,  15.0f, 1.0f, 1.0f },
-        { "Shallow Chorus (Detune)",           10,  false, false,  60.0f, 1.0f, 0.9f },
-        { "Deep Detune Wash",                  11,  true,  false,  60.0f, 1.0f, 1.0f },
-        { "Octave Spread (Oct Dn/Oct Up)",     12,  true,  false,  35.0f, 1.0f, 1.0f },
-        { "Bass Fifth Bend (5th/7th)",         15,  false, false,  30.0f, 1.0f, 0.9f },
-        { "Twin Lead Thirds (3rd/4th)",        18,  false, false,  25.0f, 1.0f, 0.9f },
-        { "Pedal Steel Bend (2nd/3rd)",        20,  false, false,  50.0f, 1.0f, 0.9f },
-        { "Studio Octave Up (HQ, latency)",     1,  true,  true,   25.0f, 1.0f, 1.0f },
+        //  nom                                programme  chords studio  glide   tone   mix
+        { "Octave Scream (2 Oct Up)",           0,  false, false,  20.0f, 1.00f, 1.00f },
+        { "Classic Octave Up",                  1,  false, false,  25.0f, 1.00f, 1.00f },
+        { "Power Fifth Rise",                   2,  true,  false,  30.0f, 0.90f, 1.00f },
+        { "Half-Step Drop (2nd Dn chords)",     4,  true,  false,  40.0f, 1.00f, 1.00f },
+        { "Seven-String Sub (Oct Dn chords)",   7,  true,  false,  30.0f, 0.80f, 1.00f },
+        { "Doom Floor (2 Oct Dn chords)",       8,  true,  false,  45.0f, 0.70f, 1.00f },
+        { "Dive Bomb",                          9,  false, false,  15.0f, 1.00f, 1.00f },
+        { "Shallow Chorus (Detune)",           10,  false, false,  60.0f, 0.85f, 0.90f },
+        { "Deep Detune Wash",                  11,  true,  false,  60.0f, 0.80f, 1.00f },
+        { "Octave Spread (Oct Dn/Oct Up)",     12,  true,  false,  35.0f, 0.90f, 0.85f },
+        { "Bass Fifth Bend (5th/7th)",         14,  false, false,  30.0f, 0.90f, 0.90f },
+        { "Twin Lead Thirds (3rd/4th)",        17,  false, false,  25.0f, 1.00f, 0.90f },
+        { "Pedal Steel Bend (2nd/3rd)",        19,  false, false,  50.0f, 0.85f, 0.90f },
+        { "Studio Octave Up (HQ, latency)",     1,  true,  true,   25.0f, 1.00f, 1.00f },
     };
     return f[jlimit (0, kNumFactory - 1, i)];
 }
@@ -40,14 +40,15 @@ AudioProcessorValueTreeState::ParameterLayout WharryProcessor::createLayout()
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "chords", 1 }, "Classic / Chords (left footswitch)", false));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "active", 1 }, "Effect On (right footswitch)", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "studio", 1 }, "Chords Studio HQ engine (adds latency)", false));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "smooth", 1 }, "Pedal Smoothing",
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "smooth", 1 }, "Glide (pedal smoothing)",
                                                         NormalisableRange<float> (0.0f, 250.0f, 0.0f, 0.5f), 30.0f,
                                                         AudioParameterFloatAttributes().withLabel ("ms")));
+    auto pct = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + " %"; });
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "tone", 1 }, "Tone", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "mix", 1 },  "Mix",  NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "MIDI Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "MIDI Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", false));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "dry", 1 }, "Dry Level (Harmony / Detune)", NormalisableRange<float> (0.0f, 1.0f), 1.0f));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "wet", 1 }, "Effect Level", NormalisableRange<float> (0.0f, 1.0f), 1.0f));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "pc", 1 }, "Respond to MIDI Program Change (Whammy 5 map)", true));
     return { p.begin(), p.end() };
 }
@@ -66,8 +67,8 @@ WharryProcessor::WharryProcessor()
     pHeel    = apvts.getRawParameterValue ("heel");
     pToe     = apvts.getRawParameterValue ("toe");
     pInvert  = apvts.getRawParameterValue ("invert");
-    pDry     = apvts.getRawParameterValue ("dry");
-    pWet     = apvts.getRawParameterValue ("wet");
+    pTone    = apvts.getRawParameterValue ("tone");
+    pMix     = apvts.getRawParameterValue ("mix");
     pPC      = apvts.getRawParameterValue ("pc");
     apvts.addParameterListener ("pedal", this);
     pedalLive = pPedal->load();
@@ -95,8 +96,8 @@ wharry::Settings WharryProcessor::currentSettings() const
     s.active   = pActive->load() > 0.5f;
     s.pedal    = jlimit (0.0f, 1.0f, pedalLive.load());
     s.smoothMs = pSmooth->load();
-    s.dryLevel = pDry->load();
-    s.wetLevel = pWet->load();
+    s.tone     = pTone->load();
+    s.mix      = pMix->load();
     return s;
 }
 
@@ -268,9 +269,9 @@ void WharryProcessor::loadFactory (int index)
     setParamValue ("program", (float) f.program);
     setParamValue ("chords", f.chords ? 1.0f : 0.0f);
     setParamValue ("studio", f.studio ? 1.0f : 0.0f);
-    setParamValue ("smooth", f.smoothMs);
-    setParamValue ("dry", f.dry);
-    setParamValue ("wet", f.wet);
+    setParamValue ("smooth", f.glideMs);
+    setParamValue ("tone", f.tone);
+    setParamValue ("mix", f.mix);
     setParamValue ("active", 1.0f);
 }
 
