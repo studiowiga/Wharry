@@ -1,0 +1,42 @@
+name: Build Wharry VST3
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wharry-VST3-Windows
+          path: build/Wharry_artefacts/Release/VST3/
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure (binaire universel Intel + Apple Silicon)
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Signature locale (ad hoc) et archive
+        run: |
+          cd build/Wharry_artefacts/Release/VST3
+          xattr -cr Wharry.vst3
+          codesign --force --deep --sign - Wharry.vst3
+          codesign --verify --deep --strict Wharry.vst3
+          ditto -c -k --sequesterRsrc --keepParent Wharry.vst3 "$GITHUB_WORKSPACE/Wharry-VST3-macOS.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wharry-VST3-macOS
+          path: Wharry-VST3-macOS.zip
+          if-no-files-found: error

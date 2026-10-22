@@ -1,0 +1,20 @@
+# Wharry (Studio Wiga)
+
+Plugin VST3 (Windows / macOS, + AU sur Mac) reproduisant le fonctionnement de la pédale DigiTech Whammy 5,
+au format **pédale double** (fenêtre identique à Ring Think : 661 x 495 par défaut et au minimum, 75 %, 100 %).
+
+- 21 programmes : 10 Whammy, 2 Detune, 9 Harmony (ordre du sélecteur = Program Change 1 à 21)
+- **CLASSIC** (notes seules, réactif, caractère Whammy) / **CHORDS** (accords, sans latence) ; option CHORDS **Studio HQ** (vocodeur de phase, latence annoncée au DAW)
+- Pédale d'expression : paramètre automatisable + **CC 11 direct** (MIDI learn possible), lissage réglable, calibration talon/pointe, inversion
+- Program Change façon Whammy 5 : 1-21 Classic, 22-42 Classic bypass, 43-63 Chords, 64-84 Chords bypass
+- Footswitch gauche = CLASSIC / CHORDS, footswitch droit = ON / OFF (MIDI learn par clic droit)
+- Suivi des notes jusqu'à ~35 Hz (7 cordes en G et plus bas)
+
+## Visuel
+`background.png` (boîtier sans plateau ni commandes), `treadle_up.png` (plateau orteil levé), `treadle_down.png` (plateau orteil enfoncé) :
+trois images 1240 x 928 au même cadrage. Les positions intermédiaires du plateau sont calculées par le plugin.
+Le visuel actuel est **provisoire** (`tools/placeholder_art.py`) en attendant le design.
+
+## Build
+GitHub Actions (`.github/workflows/build.yml`) : artefacts `Wharry-VST3-Windows` et `Wharry-VST3-macOS`.
+Tests du moteur audio : `g++ -O2 -std=c++17 tests/test_dsp.cpp -o test_dsp && ./test_dsp`
