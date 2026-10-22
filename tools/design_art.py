@@ -1,8 +1,8 @@
 # Wharry : prépare les images du plugin à partir du design de l'utilisateur (design/wharry_design_source.png, 1390 x 1132)
-#   background.png   : fond 1240 x 928 (textes réécrits, LED / écran vidés, logo Studio Wiga, jacks Studio Wiga)
+#   background.png   : fond 1020 x 928 (textes réécrits, LED / écran vidés, logo Studio Wiga, jacks Studio Wiga)
 #   treadle_down.png : calque du plateau à plat (orteil enfoncé) ; le plugin calcule les autres positions en perspective
 #   fs_on.png / fs_off.png, toggle_r.png / toggle_l.png : sprites des commandes
-#   tools/layout.txt : coordonnées des commandes dans le repère 1240 x 928 (reprises dans PluginEditor.cpp)
+#   tools/layout.txt : coordonnées des commandes dans le repère 1020 x 928 (reprises dans PluginEditor.cpp)
 #   design/apercu_treadle_up.png : aperçu de la position orteil levé
 import os, math
 import numpy as np, cv2
@@ -12,16 +12,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src = Image.open(os.path.join(ROOT, "design", "wharry_design_source.png")).convert("RGB")
 A = np.array(src)
 
-W, H = 1240, 928
-CX0, CY0, CX1, CY1 = 158, 40, 1226, 1062          # zone utile du design
-S = 0.856
+# fond recadré au plus près de la pédale : la pédale occupe toute la hauteur de la fenêtre
+W, H = 1020, 928
+CX0, CY0, CX1, CY1 = 160, 45, 1215, 1058          # contour de la pédale dans le design
+OY = 30.0                                          # marge haute : place pour la pointe du plateau levée
+S = (H - OY - 8.0) / (CY1 - CY0)
 OX = (W - (CX1 - CX0) * S) / 2.0
-OY = 6.0
 def C(x, y): return (OX + (x - CX0) * S, OY + (y - CY0) * S)
 
 # ---------- 0) éléments déplacés ----------
 KNOB_OLD, KNOB_NEW, KNOB_RS = (821, 258), (808, 378), 76          # sélecteur : centré verticalement sur l'écran, à sa gauche
-SCR_OUT = (905, 228, 1172, 528)                                   # écran agrandi (cadre extérieur)
+SCR_OUT = (905, 228, 1177, 528)                                   # écran agrandi (cadre extérieur)
 kyy, kxx = np.mgrid[0:2 * KNOB_RS, 0:2 * KNOB_RS]
 ka = np.clip((KNOB_RS - 5.0 - np.hypot(kxx - KNOB_RS + 0.5, kyy - KNOB_RS + 0.5)) / 2.0, 0, 1)
 knob_rgb = A[KNOB_OLD[1] - KNOB_RS:KNOB_OLD[1] + KNOB_RS, KNOB_OLD[0] - KNOB_RS:KNOB_OLD[0] + KNOB_RS]
@@ -59,6 +60,10 @@ yy2, xx2 = np.mgrid[reg[1]:reg[3], reg[0]:reg[2]]
 glow = cv2.dilate(glow, np.ones((11, 11), np.uint8))
 glow[np.hypot(xx2 - 822, yy2 - 250) < 77] = 0           # épargne le bouton
 mask[reg[1]:reg[3], reg[0]:reg[2]] |= glow
+reg2 = (1000, 810, 1130, 940)                      # halo de la LED du footswitch
+R1 = A[reg2[1]:reg2[3], reg2[0]:reg2[2]].astype(np.int32)
+g2 = (((R1[..., 1] - R1[..., 2]) > 4) & (R1[..., 0] > 120)).astype(np.uint8) * 255
+mask[reg2[1]:reg2[3], reg2[0]:reg2[2]] |= cv2.dilate(g2, np.ones((13, 13), np.uint8))
 inpainted = cv2.inpaint(A, mask, 6, cv2.INPAINT_TELEA)
 
 # zone du sélecteur (anciennes LED, halos, étiquettes) : panneau brossé reconstruit =
@@ -126,9 +131,9 @@ box = (round(sx0 + PAD), round(sy0 + PAD), round(sx0 + PAD + W / S), round(sy0 +
 canvas = Image.fromarray(ext).crop(box).resize((W, H), Image.LANCZOS).convert("RGBA")
 
 jo = Image.open(os.path.join(ROOT, "embase_jack_gauche_OUT.png")); ji = Image.open(os.path.join(ROOT, "embase_jack_droite_IN.png"))
-js = 0.62
+js = 0.40
 jo = jo.resize((round(jo.width * js), round(jo.height * js)), Image.LANCZOS); ji = ji.resize((round(ji.width * js), round(ji.height * js)), Image.LANCZOS)
-lx, _ = C(166, 0); rx, _ = C(1212, 0); _, jy = C(0, 560)
+lx, _ = C(166, 0); rx, _ = C(1209, 0); _, jy = C(0, 560)
 canvas.alpha_composite(jo, (round(lx - jo.width + 3), round(jy - jo.height / 2)))
 canvas.alpha_composite(ji, (round(rx - 3), round(jy - ji.height / 2)))
 
@@ -155,8 +160,17 @@ logo = Image.open(os.path.join(ROOT, "logo_studio_wiga_blanc.png")).convert("RGB
 lw = round(172 * S); logo = logo.resize((lw, round(lw * logo.height / logo.width)), Image.LANCZOS)
 la = np.array(logo).astype(np.float32); la[..., :3] = INK[:3]; logo = Image.fromarray(la.astype(np.uint8))
 px, py = C(730, 101); canvas.alpha_composite(logo, (round(px), round(py - logo.height / 2)))
-txt(185, 560, "OUT", 15, FM, "mm")
-txt(1180, 560, "IN", 15, FM, "mm")
+# IN / OUT : gravés sur la tranche de la façade, juste à côté de chaque jack (lecture de bas en haut)
+def side_label(x, y, s_):
+    f = ImageFont.truetype(FM, round(24 * S))
+    tw = int(f.getlength(s_)) + 8; th = round(34 * S)
+    im = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    ImageDraw.Draw(im).text((tw / 2, th / 2), s_, font=f, fill=INK, anchor="mm")
+    im = im.rotate(90, expand=True, resample=Image.BICUBIC)
+    px, py = C(x, y)
+    canvas.alpha_composite(im, (round(px - im.width / 2), round(py - im.height / 2)))
+side_label(186, 560, "OUT")
+side_label(1189, 560, "IN")
 canvas.save(os.path.join(ROOT, "background.png"))
 
 # ---------- 4) calque du plateau ----------

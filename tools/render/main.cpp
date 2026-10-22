@@ -24,6 +24,7 @@ int main (int argc, char** argv)
     };
     shot ("wharry_haute", 0.0f, 1, false, true);
     shot ("wharry_milieu", 0.5f, 1, false, true);
+    shot ("wharry_quart", 0.25f, 1, false, true);
     shot ("wharry_basse", 1.0f, 15, true, true);
     shot ("wharry_bypass", 0.3f, 3, false, false);
     static_cast<WharryEditor*> (ed.get())->setScaleIndex (2);

@@ -1,7 +1,7 @@
 # Wharry (Studio Wiga)
 
 Plugin VST3 (Windows / macOS, + AU sur Mac) reproduisant le fonctionnement de la pédale DigiTech Whammy 5,
-au format **pédale double** (fenêtre identique à Ring Think : 661 x 495 par défaut et au minimum, 75 %, 100 %).
+au format **pédale double** (fenêtre aux hauteurs de Ring Think : 544 x 495 par défaut et au minimum, puis 75 % et 100 %).
 
 - 21 programmes : 10 Whammy, 2 Detune, 9 Harmony (ordre du sélecteur = Program Change 1 à 21)
 - **CLASSIC** (notes seules, réactif, caractère Whammy) / **CHORDS** (accords, sans latence) ; option CHORDS **Studio HQ** (vocodeur de phase, latence annoncée au DAW)

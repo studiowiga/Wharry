@@ -53,7 +53,13 @@ public:
     void setParamValue (const juce::String& id, float plainValue);
     void togglePedalSwitch (const juce::String& id);
 
-    float getPedalShown() const   { return pedalShown.load(); }    // position lissée de la pédale (0 = haute, 1 = basse)
+    // position lissée de la pédale (0 = haute, 1 = basse) : celle du moteur audio, ou la consigne directe si l'audio
+    // ne tourne pas (transport arrêté, plugin suspendu) -> le visuel suit toujours la pédale MIDI et les automations
+    float getPedalShown() const
+    {
+        const auto now = juce::Time::getMillisecondCounter();
+        return (now - lastBlockMs.load() > 250u) ? pedalLive.load() : pedalShown.load();
+    }
     float getSemitones() const    { return semis.load(); }
     float getDetectedHz() const   { return detHz.load(); }
     int   getLatency() const      { return reportedLatency.load(); }
@@ -84,6 +90,7 @@ private:
 
     std::atomic<float> pedalLive { 0.0f }, pedalShown { 0.0f }, semis { 0.0f }, detHz { 0.0f };
     std::atomic<int> reportedLatency { 0 }, latencyToSet { -1 };
+    std::atomic<juce::uint32> lastBlockMs { 0 };
     std::atomic<int> learnTarget { 0 }, ccPedal { 11 }, ccLeft { -1 }, noteLeft { -1 }, ccRight { -1 }, noteRight { -1 };
     std::atomic<bool> leftHeld { false }, rightHeld { false };
 

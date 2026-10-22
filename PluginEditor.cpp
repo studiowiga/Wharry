@@ -6,26 +6,27 @@ using namespace juce;
 namespace
 {
     // Repère du dessin = taille de background.png (pédale + marges latérales pour les jacks). Toutes les coordonnées sont dans ces pixels.
-    constexpr int kW = 1240, kH = 928;
-    constexpr int kRefW = 993;                                   // tailles de fenêtre exprimées par rapport à cette largeur (comme Ring Think)
-    const float kScales[3] = { 661.0f / 993.0f, 0.75f, 1.0f };
-    constexpr float kDefaultScale = 661.0f / 993.0f;             // fenêtre par défaut = 661 x 495 px (= taille minimale)
+    // fond recadré au plus près de la pédale ; mêmes hauteurs de fenêtre que Ring Think (495 / 557 / 743 px),
+    // largeur selon les proportions de la pédale -> par défaut 544 x 495, jamais plus grand que Ring Think (661 x 495)
+    constexpr int kW = 1020, kH = 928;
+    constexpr float kRefH = 743.0f;                              // hauteur « 100 % » (= Ring Think à 100 %)
+    const float kScales[3] = { 495.0f / 743.0f, 0.75f, 1.0f };
+    constexpr float kDefaultScale = 495.0f / 743.0f;             // fenêtre par défaut (= taille minimale)
 
     // ---- emplacements des commandes dans le repère 1240 x 928 (générés par tools/design_art.py -> tools/layout.txt) ----
-    constexpr float kLedR = 6.4f;
-    const Point<float> kKnob (720.2f, 288.5f);  constexpr float kKnobR = 59.9f, kCapR = 44.5f;   // sélecteur 21 crans
-    const Point<float> kSmall[3] = { { 723.6f, 498.2f }, { 837.4f, 498.2f }, { 952.1f, 495.6f } };   // GLIDE, TONE, MIX
-    constexpr float kSmallR = 41.1f, kSmallCapR = 31.7f;
+    constexpr float kLedR = 6.6f;
+    const Point<float> kKnob (616.7f, 315.5f);  constexpr float kKnobR = 61.5f, kCapR = 45.7f;   // sélecteur 21 crans
+    const Point<float> kSmall[3] = { { 620.3f, 530.8f }, { 737.1f, 530.8f }, { 854.8f, 528.2f } };   // GLIDE, TONE, MIX
+    constexpr float kSmallR = 42.2f, kSmallCapR = 32.5f;
     const char* const kSmallId[3] = { "smooth", "tone", "mix" };
-    const Rectangle<float> kScreen (810.0f, 174.6f, 213.2f, 241.4f);
-    const Rectangle<float> kFs (770.7f, 642.9f, 130.1f, 130.1f);          // footswitch ON / OFF
-    const Point<float> kFsLed (937.6f, 719.0f);
-    const Rectangle<float> kToggle (953.8f, 91.6f, 53.1f, 37.7f);       // inverseur CLASSIC / CHORDS
+    const Rectangle<float> kScreen (709.0f, 198.7f, 223.2f, 247.7f);
+    const Rectangle<float> kFs (668.6f, 679.3f, 133.5f, 133.5f);          // footswitch ON / OFF
+    const Point<float> kFsLed (839.9f, 757.5f);
+    const Rectangle<float> kToggle (856.6f, 113.5f, 54.5f, 38.6f);       // inverseur CLASSIC / CHORDS
     const Rectangle<float> kToggleHit = kToggle.expanded (14.0f, 22.0f);
-    const Rectangle<float> kPlate (201.4f, 15.4f, 432.3f, 822.6f);   // plateau
-    const Rectangle<float> kStatus (150.0f, 890.0f, 940.0f, 30.0f);                            // ligne d'état sous la pédale
+    const Rectangle<float> kPlate (84.3f, 35.3f, 443.7f, 844.3f);   // plateau
     const Colour kInk (0xffeee6e4), kWarm (0xffffc47a), kCyan (0xff5fe3ff), kScreenBg (0xff081018);
-    constexpr int kFrames = 25;                                                                // positions précalculées du plateau
+    constexpr int kFrames = 33;                                                                // positions précalculées du plateau
 
     Image loadPng (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n).convertedToFormat (Image::ARGB); }
 
@@ -48,8 +49,8 @@ namespace
     //==========================================================================
     // Plateau de la pédale : il pivote autour de la charnière (côté talon, en bas). Chaque position est une
     // perspective exacte du calque « orteil enfoncé » (pas de fondu entre deux images -> aucun dédoublement).
-    constexpr float kPlateL = 201.4f, kPlateR = 633.7f, kPlateTop = 15.4f, kHingeY = 838.0f;   // plateau à plat (orteil enfoncé)
-    constexpr float kRise = 14.0f, kWiden = 1.06f;                                            // orteil levé : pointe plus haute et plus large
+    constexpr float kPlateL = 84.3f, kPlateR = 528.0f, kPlateTop = 35.3f, kHingeY = 879.6f;   // plateau à plat (orteil enfoncé)
+    constexpr float kRise = 26.0f, kWiden = 1.05f;                                            // orteil levé : pointe plus haute et plus large
 
     struct Homography
     {
@@ -154,6 +155,33 @@ namespace
                 }
             }
             if (lift < 1.0e-4) return plate;
+            // tranche droite du plateau, visible quand la pointe se lève (épaisse côté pointe, nulle à la charnière)
+            {
+                Image::BitmapData bo (plate, Image::BitmapData::readWrite);
+                const double maxFace = 9.0 * sx * lift;
+                const double ty = dstQ[1].y, by = dstQ[2].y;
+                for (int y = jmax (0, (int) std::ceil (ty)); y <= jmin (h - 1, (int) std::floor (by)); ++y)
+                {
+                    const double v = ((double) y - ty) / jmax (1.0, by - ty);          // 0 = pointe, 1 = charnière
+                    const double xr = dstQ[1].x + (dstQ[2].x - dstQ[1].x) * v;
+                    const double fw = maxFace * (1.0 - v);
+                    if (fw < 0.3) continue;
+                    for (int x = (int) std::floor (xr); x <= jmin (w - 1, (int) std::ceil (xr + fw)); ++x)
+                    {
+                        if (x < 0) continue;
+                        const double u = ((double) x - xr) / fw;                     // 0 = arête, 1 = bas de la tranche
+                        if (u < 0.0 || u > 1.0) continue;
+                        auto* px = (PixelARGB*) bo.getPixelPointer (x, y);
+                        const float k = (float) jlimit (0.0, 1.0, std::min (u * fw, (1.0 - u) * fw) + 0.5);   // bords adoucis
+                        const int g0 = (int) (34 + 46 * (1.0 - u) + 25 * (1.0 - v));   // métal sombre, plus clair près de l'arête
+                        // tranche opaque posée par-dessus (pixels prémultipliés : out = tranche * k + existant * (1 - k))
+                        auto mixc = [k] (int a, int b) { return (uint8) jlimit (0, 255, roundToInt ((float) a * k + (float) b * (1.0f - k))); };
+                        PixelARGB o;
+                        o.setARGB (mixc (255, px->getAlpha()), mixc (jmin (255, g0 + 6), px->getRed()), mixc (g0, px->getGreen()), mixc (jmin (255, g0 + 4), px->getBlue()));
+                        *px = o;
+                    }
+                }
+            }
             // ombre portée sous la pointe levée (lumière en haut à gauche -> ombre vers la droite / le bas)
             const int ox = roundToInt (8.0 * sx * lift), oy = roundToInt (11.0 * sy * lift), rad = jmax (1, roundToInt (6.0 * sx));
             std::vector<float> sh ((size_t) (w * h), 0.0f), tmp ((size_t) (w * h), 0.0f);
@@ -241,12 +269,12 @@ namespace
 
     //==========================================================================
     // menu de taille de fenêtre (identique à Ring Think)
-    bool isDefaultSize (const WharryEditor* ed) { return ed != nullptr && std::abs ((float) ed->getWidth() / (float) kRefW - kDefaultScale) < 0.02f; }
+    bool isDefaultSize (const WharryEditor* ed) { return ed != nullptr && std::abs ((float) ed->getHeight() / kRefH - kDefaultScale) < 0.02f; }
 
     void addSizeItems (PopupMenu& m, const WharryEditor* ed)
     {
         const int cur = ed != nullptr ? ed->getScaleIndex() : -1;
-        m.addItem (904, "67 % (default)", true, isDefaultSize (ed));
+        m.addItem (904, "Default (same height as Ring Think)", true, isDefaultSize (ed));
         m.addItem (902, "75 %", true, cur == 1);
         m.addItem (903, "100 %", true, cur == 2);
     }
@@ -329,11 +357,6 @@ public:
         }
 
         drawScreen (g);
-
-        // ---- ligne d'état ----
-        g.setColour (kInk);
-        g.setFont (Font (FontOptions (typeface).withHeight (17.0f * s)));
-        g.drawFittedText (drawnStatus, r (kStatus).toNearestInt(), Justification::centred, 1);
     }
 
     // ------------------------------------------------------------ souris
@@ -498,6 +521,13 @@ private:
         g.setColour (kCyan.withAlpha (0.95f * alpha));
         g.drawText (val, area.removeFromTop (fh * 0.1f), Justification::centred);
 
+        // ligne d'état (valeurs des réglages en direct, ou consigne de MIDI learn)
+        auto stRow = area.removeFromBottom (fh * 0.075f);
+        g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.056f)));
+        g.setColour (kCyan.withAlpha (proc.getLearnTarget() != MidiTarget::None ? 1.0f : 0.7f * alpha));
+        g.drawFittedText (drawnStatus, stRow.toNearestInt(), Justification::centred, 1, 0.5f);
+        area.removeFromBottom (fh * 0.02f);
+
         // barres : position de la pédale
         auto bars = area.reduced (0, fh * 0.015f);
         const float tp = jlimit (0.0f, 1.0f, drawnPedal);
@@ -518,15 +548,14 @@ private:
     {
         const auto learn = proc.getLearnTarget();
         if (learn == MidiTarget::Pedal)   return "MIDI LEARN : move your expression pedal";
-        if (learn == MidiTarget::LeftFsw) return "MIDI LEARN : press the switch / footswitch for CLASSIC - CHORDS";
-        if (learn == MidiTarget::RightFsw)return "MIDI LEARN : press the footswitch for ON - OFF";
-        const auto& pr = wharry::program (currentProgram());
+        if (learn == MidiTarget::LeftFsw) return "MIDI LEARN : CLASSIC / CHORDS switch";
+        if (learn == MidiTarget::RightFsw)return "MIDI LEARN : ON / OFF footswitch";
         auto pc = [this] (const char* id) { return String (roundToInt (proc.apvts.getParameter (id)->getValue() * 100.0f)) + " %"; };
-        String st = String (pr.label) + "   |   PEDAL " + String (roundToInt (proc.getPedalShown() * 100.0f)) + " %"
-                  + "   |   GLIDE " + String (roundToInt (proc.apvts.getRawParameterValue ("smooth")->load())) + " ms"
-                  + "   |   TONE " + pc ("tone") + "   |   MIX " + pc ("mix");
+        String st = "PEDAL " + String (roundToInt (proc.getPedalShown() * 100.0f)) + " %"
+                  + "  ·  GLIDE " + String (roundToInt (proc.apvts.getRawParameterValue ("smooth")->load())) + " ms"
+                  + "  ·  TONE " + pc ("tone") + "  ·  MIX " + pc ("mix");
         if (param ("chords") && param ("studio") && proc.getLatency() > 0)
-            st << "   |   LATENCY " << String (roundToInt (1000.0 * proc.getLatency() / jmax (1.0, proc.getSampleRate()))) << " ms";
+            st << "  ·  " << String (roundToInt (1000.0 * proc.getLatency() / jmax (1.0, proc.getSampleRate()))) << " ms";
         return st;
     }
 
@@ -567,8 +596,8 @@ private:
                 repaint (r (Rectangle<float> (kSmall[i].x - kSmallR, kSmall[i].y - kSmallR, 2 * kSmallR, 2 * kSmallR)).toNearestInt().expanded (2));
             }
         }
+        if (st != drawnStatus) { drawnStatus = st; screen = true; }
         if (screen) repaint (r (kScreen).toNearestInt().expanded (2));
-        if (st != drawnStatus) { drawnStatus = st; repaint (r (kStatus).toNearestInt().expanded (2)); }
     }
     Rectangle<int> ledArea (Point<float> c) const { const float h = kLedR * 3.8f; return r (Rectangle<float> (c.x - h, c.y - h, 2 * h, 2 * h)).toNearestInt().expanded (1); }
 
@@ -649,7 +678,7 @@ private:
     ScaledCache bg, fsOn, fsOff, tgL, tgR;
     TreadleWarp treadle;
     Typeface::Ptr typeface, typefaceBold;
-    float s = kDefaultScale * (float) kRefW / (float) kW;
+    float s = kDefaultScale * kRefH / (float) kH;
 
     Drag drag = Drag::None;
     float dragStartY = 0, dragStartVal = 0;
@@ -668,9 +697,9 @@ WharryEditor::WharryEditor (WharryProcessor& p) : AudioProcessorEditor (&p), pro
     view = std::make_unique<PedalView> (proc);
     addAndMakeVisible (*view);
     setResizable (true, true);
-    const int minW = (int) std::lround (kRefW * kDefaultScale);          // jamais plus petit que la taille par défaut
-    const int maxW = 1500;
-    setResizeLimits (minW, (int) std::lround ((double) minW * kH / kW), maxW, (int) std::lround ((double) maxW * kH / kW));
+    const int minH = (int) std::lround (kRefH * kDefaultScale);          // jamais plus petit que la taille par défaut
+    const int maxH = 1120;
+    setResizeLimits ((int) std::lround ((double) minH * kW / kH), minH, (int) std::lround ((double) maxH * kW / kH), maxH);
     getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
     setScaleIndex (jlimit (-1, 2, proc.uiScaleIdx.load()));
 }
@@ -702,7 +731,7 @@ void WharryEditor::resized()
 
 int WharryEditor::getScaleIndex() const
 {
-    const float sc = (float) getWidth() / (float) kRefW;
+    const float sc = (float) getHeight() / kRefH;
     for (int i = 1; i < 3; ++i) if (std::abs (sc - kScales[i]) < 0.02f) return i;
     return -1;
 }
@@ -713,6 +742,6 @@ void WharryEditor::setScaleIndex (int idx)
     if (idx == 0) idx = -1;
     proc.uiScaleIdx = idx;
     const float sc = idx < 0 ? kDefaultScale : kScales[idx];
-    const int w = (int) std::lround (kRefW * sc);
-    setSize (w, (int) std::lround ((double) w * kH / kW));
+    const int h = (int) std::lround (kRefH * sc);
+    setSize ((int) std::lround ((double) h * kW / kH), h);
 }

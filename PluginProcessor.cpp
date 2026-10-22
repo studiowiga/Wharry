@@ -219,6 +219,7 @@ void WharryProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi
     for (int c = 0; c < nOut; ++c) buffer.copyFrom (c, 0, m, n);
 
     pedalShown = engine.smoothedPedal();
+    lastBlockMs = Time::getMillisecondCounter();
     semis = engine.currentSemitones();
     detHz = engine.detectedHz();
 
