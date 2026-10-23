@@ -15,7 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = sys.argv[1]
 OUT = sys.argv[2]
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 TMP = os.path.dirname(OUT)
 
 for n, f in (("Pop", "Poppins-Regular"), ("PopL", "Poppins-Light"), ("PopM", "Poppins-Medium"), ("PopB", "Poppins-Bold")):
@@ -44,7 +44,12 @@ crop = (0, 0, int(450 * k * 928 / 928), a.height)
 pa, pb = a.crop((0, 0, int(560 * k), a.height)), b.crop((0, 0, int(560 * k), b.height))
 both = Image.new("RGB", (pa.width * 2 + 24, pa.height), (255, 255, 255)); both.paste(pa, (0, 0)); both.paste(pb, (pa.width + 24, 0))
 updown = os.path.join(TMP, "wharry_updown.png"); both.save(updown)
-cover = os.path.join(SHOTS, "wharry_100pc_milieu.png")
+# couverture : pédale détourée (masque de la silhouette généré par tools/design_art.py)
+shot = Image.open(os.path.join(SHOTS, "wharry_100pc_basse.png")).convert("RGB")   # plateau à plat : silhouette nette
+msk = Image.open(os.path.join(ROOT, "design", "pedal_mask.png")).convert("L").resize(shot.size, Image.LANCZOS)
+cut = Image.new("RGBA", shot.size, (0, 0, 0, 0)); cut.paste(shot, (0, 0), msk)
+cut = cut.crop(cut.getbbox())
+cover = os.path.join(TMP, "wharry_cover_cutout.png"); cut.save(cover)
 
 def img(path, width):
     im = Image.open(path); h = width * im.height / im.width
@@ -58,8 +63,9 @@ st = {
     "small": ParagraphStyle("small", fontName="Pop", fontSize=8.2, leading=11.5, textColor=GREY),
     "cell": ParagraphStyle("cell", fontName="Pop", fontSize=8.4, leading=11, textColor=DARK),
     "cellb": ParagraphStyle("cellb", fontName="PopM", fontSize=8.4, leading=11, textColor=DARK),
-    "cover": ParagraphStyle("cover", fontName="PopL", fontSize=40, leading=46, textColor=DARK, alignment=TA_CENTER),
-    "coversub": ParagraphStyle("coversub", fontName="Pop", fontSize=12, leading=16, textColor=GREY, alignment=TA_CENTER),
+    "cover": ParagraphStyle("cover", fontName="PopL", fontSize=40, leading=46, textColor=colors.white, alignment=TA_CENTER),
+    "coversub": ParagraphStyle("coversub", fontName="Pop", fontSize=12, leading=16, textColor=colors.HexColor("#BDB5B5"), alignment=TA_CENTER),
+    "coverlang": ParagraphStyle("coverlang", fontName="PopM", fontSize=8.5, leading=11, textColor=colors.HexColor("#E0262F")),
 }
 def P(t, s="p"): return Paragraph(t, st[s])
 def bullets(items): return [P("&bull;&nbsp;&nbsp;" + i) for i in items]
@@ -116,7 +122,7 @@ T = {
  ov_rows=[["#", "Control", "Role"],
    ["1", "Treadle", "Expression pedal. Toe up = 0 %, toe down = 100 %. Moves with the mouse (drag down to press the toe, wheel, double-click = full up / full down), with MIDI CC 11 and with DAW automation."],
    ["2", "Program selector", "21 detents: 10 Whammy, 2 Detune, 9 Harmony programs. Drag up / down or use the mouse wheel."],
-   ["3", "Screen", "Engine, ON / BYPASS, family and number, previous / current / next program, live pitch offset, treadle travel bars and the status line. Click it to open the preset menu."],
+   ["3", "Screen", "Engine, ON / BYPASS, preset name (or family) and number, previous / current / next program, live pitch offset, treadle travel bars and the status line. Click the previous / next program to step through the programs, click anywhere else (PRESETS) to open the preset list."],
    ["4", "CLASSIC · CHORDS", "Pitch engine selector (single notes / chords)."],
    ["5", "GLIDE", "Treadle smoothing, 0 to 250 ms (default 30 ms)."],
    ["6", "TONE", "Low-pass filter on the shifted voice, 700 Hz to fully open (default 100 %)."],
@@ -133,6 +139,7 @@ T = {
       ("CLASSIC / CHORDS", "<b>Classic</b>: single-note engine locked on the detected pitch (down to about 35 Hz, so a 7-string tuned to G or lower tracks), very fast, with the slightly grainy Whammy character on chords. <b>Chords</b>: polyphonic engine, chords stay in tune, no latency. Right-click &gt; <b>Chords engine</b> &gt; <b>Studio HQ</b> uses a phase-vocoder engine with the cleanest result, at the cost of about 170 ms latency (reported to the DAW): for re-amping and mixing, not for live playing.")],
  fs_t="5. Footswitch, MIDI and expression pedals",
  fs=["<b>Footswitch</b>: click to switch the effect on or off; the LED shows the state. Switching programs or engines uses a short crossfade (no clicks).",
+     "<b>Treadle look</b>: the drawing follows the tilt with light and shadow: raised toe catches the light and casts a shadow, a soft reflection slides along the rubber, and the toe darkens when pressed down.",
      "<b>MIDI CC 11</b> moves the treadle directly, as on the original pedal (0 = toe up, 127 = toe down). Right-click the treadle: <b>MIDI learn pedal controller</b> (move your pedal), <b>Reset to CC 11</b>, <b>Invert pedal direction</b>, <b>Reset heel / toe calibration</b>. The heel / toe calibration parameters let a pedal that does not reach 0 or 127 cover the full range.",
      "Right-click the footswitch or the CLASSIC · CHORDS switch to <b>MIDI learn</b> a CC or note for them (or clear the assignment).",
      "<b>Program Change</b> (can be disabled in the right-click menu), same logic as the Whammy 5: PC 1-21 = program 1-21 in Classic, PC 22-42 = same programs bypassed, PC 43-63 = Chords, PC 64-84 = Chords bypassed.",
@@ -156,7 +163,8 @@ T = {
        ["Range", "up to +2 octaves / -3 octaves"], ["CPU", "about 2 % of one core at 48 kHz"]],
  hist=[["1.0.0", "First version: Whammy 5 engine, MIDI, temporary visual"], ["1.1.0", "User design, treadle animated in perspective, GLIDE / TONE / MIX, live screen"],
        ["1.2.0", "Program LEDs and labels removed, programs shown on the screen"], ["1.3.0", "Larger screen, selector centred on its left"],
-       ["1.4.0", "Pedal fills the window (544 x 495), smaller jacks, IN / OUT engraved on the sides, more realistic treadle tilt synchronised with MIDI / automation, status line in the screen"]],
+       ["1.4.0", "Pedal fills the window (544 x 495), smaller jacks, IN / OUT engraved on the sides, more realistic treadle tilt synchronised with MIDI / automation, status line in the screen"],
+       ["1.5.0", "Rounded pedal corners, IN / OUT moved away from the edges, treadle lighting (moving reflection, light and shadow following the tilt), presets selectable from the screen (preset list, previous / next program)"]],
  updown_cap="Treadle toe up (left) and toe down (right): the drawing follows the MIDI pedal and automation in real time.",
  ver_h=["Version", "Changes"], spec_h=["", ""]),
 "fr": dict(
@@ -173,7 +181,7 @@ T = {
  ov_rows=[["#", "Commande", "Rôle"],
    ["1", "Plateau", "Pédale d'expression. Orteil levé = 0 %, orteil enfoncé = 100 %. Se déplace à la souris (tirer vers le bas = appuyer sur la pointe, molette, double-clic = tout en haut / tout en bas), avec le MIDI CC 11 et avec les automations du DAW."],
    ["2", "Sélecteur de programme", "21 crans : 10 programmes Whammy, 2 Detune, 9 Harmony. Glisser vers le haut / le bas ou utiliser la molette."],
-   ["3", "Écran", "Moteur, ON / BYPASS, famille et numéro, programme précédent / actuel / suivant, décalage en direct, barres de course du plateau et ligne d'état. Un clic ouvre le menu des presets."],
+   ["3", "Écran", "Moteur, ON / BYPASS, nom du preset (ou famille) et numéro, programme précédent / actuel / suivant, décalage en direct, barres de course du plateau et ligne d'état. Un clic sur le programme précédent / suivant change de programme ; un clic ailleurs (PRESETS) ouvre la liste des presets."],
    ["4", "CLASSIC · CHORDS", "Choix du moteur de transposition (notes seules / accords)."],
    ["5", "GLIDE", "Lissage du plateau, de 0 à 250 ms (30 ms par défaut)."],
    ["6", "TONE", "Filtre passe-bas sur la voix transposée, de 700 Hz à grand ouvert (100 % par défaut)."],
@@ -190,6 +198,7 @@ T = {
       ("CLASSIC / CHORDS", "<b>Classic</b> : moteur pour notes seules calé sur la hauteur détectée (jusqu'à environ 35 Hz, donc une 7 cordes accordée en G ou plus bas est suivie), très rapide, avec le caractère un peu granuleux de la Whammy sur les accords. <b>Chords</b> : moteur polyphonique, accords justes, sans latence. Clic droit &gt; <b>Chords engine</b> &gt; <b>Studio HQ</b> : moteur à vocodeur de phase, résultat le plus propre, avec environ 170 ms de latence (annoncée au DAW) : pour le ré-amping et le mixage, pas pour jouer en direct.")],
  fs_t="5. Footswitch, MIDI et pédales d'expression",
  fs=["<b>Footswitch</b> : un clic active ou coupe l'effet ; la LED indique l'état. Les changements de programme ou de moteur se font avec un fondu court (pas de clic).",
+     "<b>Rendu du plateau</b> : le dessin suit l'inclinaison avec lumière et ombres : la pointe levée prend la lumière et projette une ombre, un reflet doux glisse sur le caoutchouc, et la pointe s'assombrit quand elle est enfoncée.",
      "Le <b>MIDI CC 11</b> déplace directement le plateau, comme sur la pédale d'origine (0 = orteil levé, 127 = orteil enfoncé). Clic droit sur le plateau : <b>MIDI learn pedal controller</b> (bougez votre pédale), <b>Reset to CC 11</b>, <b>Invert pedal direction</b>, <b>Reset heel / toe calibration</b>. Les paramètres de calibration talon / pointe permettent à une pédale qui n'atteint pas 0 ou 127 de couvrir toute la course.",
      "Clic droit sur le footswitch ou sur l'inverseur CLASSIC · CHORDS : <b>MIDI learn</b> d'un CC ou d'une note (ou suppression de l'assignation).",
      "<b>Program Change</b> (désactivable dans le menu clic droit), même logique que la Whammy 5 : PC 1-21 = programmes 1-21 en Classic, PC 22-42 = mêmes programmes en bypass, PC 43-63 = Chords, PC 64-84 = Chords en bypass.",
@@ -213,7 +222,8 @@ T = {
        ["Plage", "jusqu'à +2 octaves / -3 octaves"], ["Processeur", "environ 2 % d'un cœur à 48 kHz"]],
  hist=[["1.0.0", "Première version : moteur Whammy 5, MIDI, visuel provisoire"], ["1.1.0", "Design de l'utilisateur, plateau animé en perspective, GLIDE / TONE / MIX, écran en direct"],
        ["1.2.0", "LED et noms des programmes supprimés, programmes affichés sur l'écran"], ["1.3.0", "Écran agrandi, sélecteur centré à sa gauche"],
-       ["1.4.0", "Pédale agrandie dans la fenêtre (544 x 495), jacks plus petits, IN / OUT gravés sur les tranches, bascule du plateau plus réaliste et synchronisée avec le MIDI / les automations, ligne d'état dans l'écran"]],
+       ["1.4.0", "Pédale agrandie dans la fenêtre (544 x 495), jacks plus petits, IN / OUT gravés sur les tranches, bascule du plateau plus réaliste et synchronisée avec le MIDI / les automations, ligne d'état dans l'écran"],
+       ["1.5.0", "Coins de la pédale arrondis, IN / OUT éloignés des bords, éclairage du plateau (reflet mobile, lumière et ombres qui suivent l'inclinaison), presets à choisir depuis l'écran (liste des presets, programme précédent / suivant)"]],
  updown_cap="Plateau orteil levé (à gauche) et orteil enfoncé (à droite) : le dessin suit la pédale MIDI et les automations en temps réel.",
  ver_h=["Version", "Changements"], spec_h=["", ""]),
 }
@@ -221,18 +231,19 @@ T = {
 W = A4[0] - 36 * mm
 def section(lang):
     t = T[lang]; f = []
-    # couverture
-    f.append(Spacer(1, 12 * mm))
-    f.append(P(t["lang"], "small"))
-    f.append(Spacer(1, 4 * mm))
-    f.append(img(cover, W * 0.86))
+    # couverture (page noire, pédale détourée)
+    f.append(NextPageTemplate("p"))
+    f.append(Spacer(1, 6 * mm))
+    f.append(P(t["lang"], "coverlang"))
+    f.append(Spacer(1, 6 * mm))
+    f.append(img(cover, W * 0.84))
     f.append(Spacer(1, 6 * mm))
     f.append(P("W H A R R Y", "cover"))
     f.append(P(t["sub"], "coversub"))
     f.append(Spacer(1, 2 * mm))
     f.append(P(t["ver"], "coversub"))
     f.append(Spacer(1, 6 * mm))
-    f.append(img(os.path.join(TMP, "logo_dark.png"), 52 * mm))
+    f.append(img(os.path.join(ROOT, "logo_studio_wiga_blanc.png"), 52 * mm))
     f.append(PageBreak())
     f.append(P(t["intro_t"], "h1")); f += [P(x) for x in t["intro"]]
     f.append(P(t["inst_t"], "h1"))
@@ -277,8 +288,14 @@ def deco(c, doc):
 
 doc = BaseDocTemplate(OUT, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=18 * mm,
                       title="Wharry - Manual / Notice v" + VERSION, author="Studio Wiga")
-doc.addPageTemplates([PageTemplate(id="p", frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f")], onPage=deco)])
-story = section("en") + section("fr")
-story = story[:-1]
+def cover_bg(c, doc):
+    c.saveState(); c.setFillColor(colors.black); c.rect(0, 0, A4[0], A4[1], stroke=0, fill=1)
+    c.setFillColor(RED); c.rect(0, A4[1] - 3 * mm, A4[0], 3 * mm, stroke=0, fill=1); c.restoreState()
+fr_ = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f")
+doc.addPageTemplates([PageTemplate(id="cover", frames=[fr_], onPage=cover_bg),
+                      PageTemplate(id="p", frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f2")], onPage=deco)])
+en = section("en"); fr = section("fr")
+en[-1:] = [NextPageTemplate("cover"), PageBreak()]      # la partie française commence aussi par une couverture noire
+story = en + fr[:-1]
 doc.build(story)
 print(OUT)

@@ -50,6 +50,7 @@ public:
     void selectWhammyProgram (int program0to20);     // programme d'origine de la pédale (sélecteur)
     void loadFactory (int index);
     int  getCurrentFactory() const { return currentFactory; }
+    int  getActiveFactory() const { return activeFactory.load(); }   // preset usine chargé et non modifié depuis (-1 sinon)
     void setParamValue (const juce::String& id, float plainValue);
     void togglePedalSwitch (const juce::String& id);
 
@@ -98,6 +99,7 @@ private:
     std::atomic<int> pendingProgram { -1 }, pendingChords { -1 }, pendingActive { -1 };
     std::atomic<bool> pendingToggleLeft { false }, pendingToggleRight { false };
     int currentFactory = 0;
+    std::atomic<int> activeFactory { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WharryProcessor)
 };

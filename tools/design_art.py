@@ -120,6 +120,75 @@ sd.rounded_rectangle((x0 + G, y0 + G, x1 - G, y1 - G), 9, fill=(8, 15, 22))
 sd.line((x0 + G + 8, y0 + G + 1, x1 - G - 8, y0 + G + 1), fill=(120, 130, 140, 120), width=1)   # reflet sur la vitre
 inpainted = np.array(scr_img)
 SCR = (x0 + G, y0 + G, x1 - G, y1 - G)
+# ---------- 1b) coins de la pédale : léger arrondi au lieu des pans coupés ----------
+# Le pan coupé et sa pièce de chant sont supprimés ; le coin est refait comme un vrai coin usiné arrondi :
+#  - cadre (noir, filet chromé, chant) = profil réel du bord droit voisin, enroulé autour de l'arc ;
+#  - panneau = même ligne de pixels prise plus loin sur la même rangée (le brossage horizontal reste continu).
+def profile(img, ox, oy, sx, sy, horizontal, depth, at, n=10):
+    """profil depuis le bord extérieur vers l'intérieur, pris sur la partie droite du bord, à 'at' px du coin"""
+    acc = []
+    for k in range(n):
+        o = at + k
+        row = []
+        for dd in range(depth):
+            x = ox + sx * (o if horizontal else dd); y = oy + sy * (dd if horizontal else o)
+            row.append(img[int(y), int(x)].astype(np.float32))
+        acc.append(row)
+    return np.median(np.array(acc), 0)
+
+def samp(prof, d):
+    d = min(max(d, 0.0), len(prof) - 1.001); i = int(d); f = d - i
+    return prof[i] * (1 - f) + prof[i + 1] * f
+
+def round_corner(img, ox, oy, sx, sy, L, R, F, xmax=None, keep=None, row_copy=True, inpaint_panel=False):
+    """ox, oy : coin extérieur virtuel ; sx, sy : sens vers l'intérieur ; L : jambe du pan coupé ;
+    R : rayon de l'arrondi ; F : épaisseur du cadre (jusqu'au panneau)"""
+    src = img.astype(np.float32); out = src.copy()
+    depth = int(F + 8)
+    ph = profile(img, ox, oy, sx, sy, True, depth, int(L + F + 10))      # bord horizontal (haut / bas)
+    pv = profile(img, ox, oy, sx, sy, False, depth, int(L + F + 10))     # bord vertical (gauche / droite)
+    K = int(L + F * 1.6 + 24)
+    lim = L + F * 1.42 + 14                                      # au-delà : image d'origine intacte
+    pmask = np.zeros(img.shape[:2], np.uint8)
+    for v in range(K):
+        for u in range(K):
+            x = int(ox + sx * u + (0 if sx > 0 else -1)); y = int(oy + sy * v + (0 if sy > 0 else -1))
+            if xmax is not None and x >= xmax: continue
+            if keep is not None and keep(x, y): continue
+            uc, vc = u + 0.5, v + 0.5
+            if uc + vc > lim + 6: continue
+            if uc < R and vc < R:
+                d = R - math.hypot(R - uc, R - vc); w = math.atan2(R - vc, R - uc) / (math.pi / 2)
+            else:
+                d = min(uc, vc); w = 1.0 / (1.0 + math.exp(-(uc - vc) / 5.0))   # raccord d'onglet adouci
+            if d < -0.6: continue                                  # dehors : fond d'origine
+            if d < F + 2:
+                val = samp(pv, d) * (1 - w) + samp(ph, d) * w
+            elif inpaint_panel:
+                pmask[y, x] = 255; val = src[y, x]
+            else:
+                if row_copy: xs, ys = x + sx * int(lim + 4), y
+                else:        xs, ys = x, y + sy * int(lim + 4)
+                val = src[int(ys), int(xs)]
+                if d < F + 4: val = val * ((d - F - 2) / 2) + (samp(pv, d) * (1 - w) + samp(ph, d) * w) * (1 - (d - F - 2) / 2)
+            blend = min(1.0, max(0.0, (lim + 6 - (uc + vc)) / 6.0))   # raccord progressif vers l'original
+            a = min(1.0, d + 0.6) * blend
+            out[y, x] = val * a + src[y, x] * (1 - a)
+    res = np.clip(out, 0, 255).astype(np.uint8)
+    if inpaint_panel and pmask.any(): res = cv2.inpaint(res, pmask, 9, cv2.INPAINT_TELEA)
+    return res
+
+RC = 20                                                      # rayon des coins (pixels du design)
+img = inpainted
+img = round_corner(img, 1211, 46, -1, +1, 62, RC, 14)                               # haut droit (panneau)
+img = round_corner(img, 1211, 1057, -1, -1, 72, RC, 30, row_copy=False)                             # bas droit (pièce d'angle supprimée)
+screw = lambda x, y: math.hypot(x - 212, y - 1002) < 15
+img = round_corner(img, 162, 1057, +1, -1, 56, RC, 30, keep=screw, inpaint_panel=True)                  # bas gauche (boîtier)
+img = round_corner(img, 164, 70, +1, +1, 50, RC, 16, xmax=204, row_copy=False)      # haut gauche (boîtier, sous le plateau)
+img = round_corner(img, 204, 51, +1, +1, 16, 12, 22)                                # coins hauts du plateau
+img = round_corner(img, 708, 51, -1, +1, 16, 12, 22)
+inpainted = img
+
 clean = Image.fromarray(inpainted)
 
 # ---------- 2) mise à l'échelle sur le fond ----------
@@ -169,12 +238,13 @@ def side_label(x, y, s_):
     im = im.rotate(90, expand=True, resample=Image.BICUBIC)
     px, py = C(x, y)
     canvas.alpha_composite(im, (round(px - im.width / 2), round(py - im.height / 2)))
-side_label(186, 560, "OUT")
-side_label(1189, 560, "IN")
+side_label(191, 560, "OUT")
+side_label(1171, 560, "IN")
 canvas.save(os.path.join(ROOT, "background.png"))
 
 # ---------- 4) calque du plateau ----------
-PL = [(206, 64), (219, 51), (694, 51), (708, 64), (708, 1000), (700, 1012), (210, 1012), (203, 1000)]
+def arc(cx, cy, r, a0, a1, n=8): return [(cx + r * math.cos(math.radians(a0 + (a1 - a0) * i / n)), cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / n))) for i in range(n + 1)]
+PL = arc(216, 63, 12, 180, 270) + arc(696, 63, 12, 270, 360) + [(708, 1000), (700, 1012), (210, 1012), (203, 1000)]
 pm = Image.new("L", (W, H), 0); ImageDraw.Draw(pm).polygon([C(*p) for p in PL], fill=255)
 pm = pm.filter(ImageFilter.GaussianBlur(0.7))
 down = canvas.copy(); down.putalpha(pm)
@@ -182,12 +252,22 @@ down.save(os.path.join(ROOT, "treadle_down.png"))
 
 # aperçu orteil levé (même calcul que le plugin)
 top_y = C(0, 51)[1]; hinge_y = C(0, 1012)[1]; xl = C(203, 0)[0]; xr = C(708, 0)[0]; cxm = (xl + xr) / 2
-rise, widen = 14.0, 1.06
+rise, widen = 26.0, 1.015
 M = cv2.getPerspectiveTransform(np.float32([[xl, top_y], [xr, top_y], [xr, hinge_y], [xl, hinge_y]]),
                                 np.float32([[cxm - (cxm - xl) * widen, top_y - rise], [cxm + (xr - cxm) * widen, top_y - rise], [xr, hinge_y], [xl, hinge_y]]))
 up = cv2.warpPerspective(np.array(down), M, (W, H), flags=cv2.INTER_CUBIC)
 prev = canvas.copy(); prev.alpha_composite(Image.fromarray(up, "RGBA"))
 prev.convert("RGB").save(os.path.join(ROOT, "design", "apercu_treadle_up.png"))
+
+# masque de la silhouette (pédale détourée pour la couverture de la notice)
+mk = Image.new("L", (W, H), 0); md = ImageDraw.Draw(mk)
+def CR(x0, y0, x1, y1): a = C(x0, y0); b = C(x1, y1); return (a[0], a[1], b[0], b[1])
+md.rounded_rectangle(CR(162, 70, 1211, 1057), RC * S, fill=255)
+md.rounded_rectangle(CR(700, 46, 1211, 400), RC * S, fill=255)
+md.polygon([C(*p) for p in PL], fill=255)
+for (im_, x_) in ((jo, lx - jo.width + 3), (ji, rx - 3)):
+    md.rectangle((x_, jy - im_.height / 2, x_ + im_.width, jy + im_.height / 2), fill=255)
+mk.filter(ImageFilter.GaussianBlur(0.8)).save(os.path.join(ROOT, "design", "pedal_mask.png"))
 
 # ---------- 5) sprites ----------
 def sprite(box, name, flip=False):

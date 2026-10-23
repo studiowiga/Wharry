@@ -50,7 +50,7 @@ namespace
     // Plateau de la pédale : il pivote autour de la charnière (côté talon, en bas). Chaque position est une
     // perspective exacte du calque « orteil enfoncé » (pas de fondu entre deux images -> aucun dédoublement).
     constexpr float kPlateL = 84.3f, kPlateR = 528.0f, kPlateTop = 35.3f, kHingeY = 879.6f;   // plateau à plat (orteil enfoncé)
-    constexpr float kRise = 26.0f, kWiden = 1.05f;                                            // orteil levé : pointe plus haute et plus large
+    constexpr float kRise = 26.0f, kWiden = 1.015f;                                            // orteil levé : pointe plus haute et plus large
 
     struct Homography
     {
@@ -127,35 +127,52 @@ namespace
             const int w = src.getWidth(), h = src.getHeight();
             const double sx = (double) w / box.getWidth(), sy = (double) h / box.getHeight();
             auto loc = [&] (double x, double y) { return Point<double> ((x - box.getX()) * sx, (y - box.getY()) * sy); };
-            const double cx = 0.5 * (kPlateL + kPlateR), lift = 1.0 - t;
+            // inclinaison : s = 1 pointe levée, 0 plateau à plat (t = 0.8), < 0 pointe enfoncée au-delà du plat
+            const double sTilt = jlimit (-0.25, 1.0, (0.8 - (double) t) / 0.8);
+            const double cx = 0.5 * (kPlateL + kPlateR), lift = jmax (0.0, sTilt);
             const double wid = 1.0 + (kWiden - 1.0) * lift, rise = kRise * lift;
             const Point<double> srcQ[4] = { loc (kPlateL, kPlateTop), loc (kPlateR, kPlateTop), loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
             const Point<double> dstQ[4] = { loc (cx - (cx - kPlateL) * wid, kPlateTop - rise), loc (cx + (kPlateR - cx) * wid, kPlateTop - rise),
                                             loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
             Image plate (Image::ARGB, w, h, true);
             Homography H;
-            if (lift < 1.0e-4 || ! H.solve (dstQ, srcQ)) plate = src.createCopy();
-            else
+            const bool warp = lift > 1.0e-4 && H.solve (dstQ, srcQ);
             {
                 const Image::BitmapData bs (src, Image::BitmapData::readOnly);
                 Image::BitmapData bo (plate, Image::BitmapData::writeOnly);
-                const double topY = dstQ[0].y, botY = dstQ[3].y;
+                const double topY = dstQ[0].y, botY = dstQ[3].y, span = jmax (1.0, botY - topY);
+                // reflet : bande douce et légèrement oblique (lumière en haut à gauche) qui glisse le long du plateau
+                const double bandC = 0.10 + 0.55 * (double) t;                 // 0 = pointe, 1 = charnière
+                const double bandW = 0.16, bandK = 0.16 + 0.10 * lift;
                 for (int y = 0; y < h; ++y)
                 {
-                    // la partie avant, inclinée vers la lumière (en haut à gauche), s'éclaircit un peu
-                    const double gy = jlimit (0.0, 1.0, (botY - (double) y) / jmax (1.0, botY - topY));
-                    const float gain = (float) (1.0 + 0.10 * lift * std::pow (gy, 1.5));
+                    const double gy = jlimit (0.0, 1.0, (botY - (double) y) / span);   // 1 = pointe, 0 = charnière
+                    // diffus : la pointe levée se tourne vers la lumière, enfoncée elle s'en détourne ; creux sombre près de la charnière
+                    double gain = 1.0 + 0.13 * sTilt * std::pow (gy, 1.3) - 0.07 * lift * std::pow (1.0 - gy, 5.0);
                     for (int x = 0; x < w; ++x)
                     {
-                        const auto q = H.map (x + 0.5, y + 0.5);
-                        const double u = q.x - 0.5, v = q.y - 0.5;
+                        double u = x, v = y;
+                        if (warp) { const auto q = H.map (x + 0.5, y + 0.5); u = q.x - 0.5; v = q.y - 0.5; }
                         if (u < -1.0 || v < -1.0 || u > w || v > h) continue;
-                        *(PixelARGB*) bo.getPixelPointer (x, y) = sample (bs, w, h, (float) u, (float) v, gain);
+                        PixelARGB px = sample (bs, w, h, (float) u, (float) v, (float) gain);
+                        if (px.getAlpha() > 0)
+                        {
+                            const double xr = (double) x / (double) w;
+                            const double bpos = (1.0 - gy) + 0.22 * (xr - 0.5);
+                            const double bnd = bandK * std::exp (-0.5 * std::pow ((bpos - bandC) / bandW, 2.0));
+                            if (bnd > 0.003)
+                            {
+                                const float al = (float) px.getAlpha();
+                                auto lift8 = [&] (uint8 c) { return (uint8) jmin ((int) al, roundToInt ((float) c + (al - (float) c) * (float) bnd)); };
+                                px.setARGB (px.getAlpha(), lift8 (px.getRed()), lift8 (px.getGreen()), lift8 (px.getBlue()));
+                            }
+                        }
+                        *(PixelARGB*) bo.getPixelPointer (x, y) = px;
                     }
                 }
             }
-            if (lift < 1.0e-4) return plate;
             // tranche droite du plateau, visible quand la pointe se lève (épaisse côté pointe, nulle à la charnière)
+            if (lift > 1.0e-4)
             {
                 Image::BitmapData bo (plate, Image::BitmapData::readWrite);
                 const double maxFace = 9.0 * sx * lift;
@@ -183,7 +200,8 @@ namespace
                 }
             }
             // ombre portée sous la pointe levée (lumière en haut à gauche -> ombre vers la droite / le bas)
-            const int ox = roundToInt (8.0 * sx * lift), oy = roundToInt (11.0 * sy * lift), rad = jmax (1, roundToInt (6.0 * sx));
+            // ombre : contact serré quand le plateau est à plat ou enfoncé, ombre portée plus large et décalée quand la pointe se lève
+            const int ox = roundToInt ((2.0 + 8.0 * lift) * sx), oy = roundToInt ((3.0 + 11.0 * lift) * sy), rad = jmax (1, roundToInt ((3.0 + 5.0 * lift) * sx));
             std::vector<float> sh ((size_t) (w * h), 0.0f), tmp ((size_t) (w * h), 0.0f);
             {
                 const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
@@ -223,7 +241,7 @@ namespace
             {
                 const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
                 Image::BitmapData bo (out, Image::BitmapData::writeOnly);
-                const float strength = (float) (0.55 * lift);
+                const float strength = (float) (0.32 + 0.30 * lift - 0.10 * jmin (0.0, sTilt));
                 for (int y = 0; y < h; ++y)
                     for (int x = 0; x < w; ++x)
                     {
@@ -365,7 +383,15 @@ public:
         const auto p = e.position / s;
         if (e.mods.isPopupMenu()) { showMenu (p); return; }
         drag = Drag::None;
-        if (kScreen.contains (p)) { showPresetMenu(); return; }
+        if (kScreen.contains (p))
+        {
+            // clic sur le programme précédent / suivant affiché = changement direct ; ailleurs = liste des presets
+            const float rel = (p.y - kScreen.getY() - 7.0f) / kScreen.getHeight();
+            const int cur = currentProgram();
+            if (rel > 0.205f && rel < 0.295f && cur > 0)                         { proc.selectWhammyProgram (cur - 1); return; }
+            if (rel > 0.455f && rel < 0.545f && cur < wharry::kNumPrograms - 1)  { proc.selectWhammyProgram (cur + 1); return; }
+            showPresetMenu(); return;
+        }
         if (p.getDistanceFrom (kKnob) < kKnobR) { drag = Drag::Knob; dragStartY = p.y; dragStartProg = currentProgram(); return; }
         for (int i = 0; i < 3; ++i)
             if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f)
@@ -488,17 +514,28 @@ private:
         auto top = area.removeFromTop (fh * 0.08f);
         g.drawText (drawnChords ? (param ("studio") ? "CHORDS HQ" : "CHORDS") : "CLASSIC", top, Justification::centredLeft);
         g.drawText (drawnActive ? "ON" : "BYPASS", top, Justification::centredRight);
+        {   // invitation : un clic sur l'écran ouvre la liste des presets
+            g.setColour (kCyan.withAlpha (0.55f));
+            g.drawText ("PRESETS", top, Justification::centred);
+            const float tw = GlyphArrangement::getStringWidth (Font (FontOptions (typefaceBold).withHeight (fh * 0.068f)), "PRESETS");
+            const float tx = top.getCentreX() + tw * 0.5f + fh * 0.02f, ty = top.getCentreY();
+            Path tri; tri.addTriangle (tx, ty - fh * 0.012f, tx + fh * 0.03f, ty - fh * 0.012f, tx + fh * 0.015f, ty + fh * 0.012f);
+            g.fillPath (tri);
+        }
         area.removeFromTop (fh * 0.02f);
         g.setColour (kCyan.withAlpha (0.2f)); g.fillRect (area.getX(), area.getY(), area.getWidth(), jmax (1.0f, 0.8f * s));
         area.removeFromTop (fh * 0.025f);
 
         // famille + position sur le sélecteur
-        const char* fam = pr.type == wharry::Whammy ? "WHAMMY" : (pr.type == wharry::Detune ? "DETUNE" : "HARMONY");
+        String fam = pr.type == wharry::Whammy ? "WHAMMY" : (pr.type == wharry::Detune ? "DETUNE" : "HARMONY");
+        const int af = proc.getActiveFactory();
+        if (af >= 0 && WharryProcessor::factory (af).program == cur) fam = WharryProcessor::factory (af).name;   // preset usine chargé
         g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.068f)));
         g.setColour (kCyan.withAlpha (0.75f * alpha));
         auto famRow = area.removeFromTop (fh * 0.08f);
-        g.drawText (fam, famRow, Justification::centredLeft);
-        g.drawText (String (cur + 1) + " / " + String (wharry::kNumPrograms), famRow, Justification::centredRight);
+        auto numArea = famRow.removeFromRight (famRow.getWidth() * 0.26f);
+        g.drawFittedText (fam, famRow.toNearestInt(), Justification::centredLeft, 1, 0.7f);
+        g.drawText (String (cur + 1) + " / " + String (wharry::kNumPrograms), numArea, Justification::centredRight);
 
         // liste défilante : programme précédent, programme choisi (en grand), programme suivant
         auto row = [&] (int idx, float h, float size, float a, bool bold)
@@ -568,6 +605,7 @@ private:
         const float ped = proc.getPedalShown(), sm = proc.getSemitones();
         const String st = statusText();
         bool screen = false;
+        if (proc.getActiveFactory() != drawnFactory) { drawnFactory = proc.getActiveFactory(); screen = true; }
 
         if (std::abs (ped - drawnPedal) > 0.002f)
         {
@@ -603,13 +641,13 @@ private:
 
     void showPresetMenu()
     {
-        PopupMenu m, progs, fac;
-        const int cur = currentProgram();
-        for (int i = 0; i < wharry::kNumPrograms; ++i) progs.addItem (1 + i, wharry::program (i).name, true, i == cur);
-        for (int i = 0; i < WharryProcessor::kNumFactory; ++i) fac.addItem (101 + i, WharryProcessor::factory (i).name);
-        m.addSectionHeader ("Presets");
-        m.addSubMenu ("Whammy programs (original)", progs);
-        m.addSubMenu ("Studio Wiga factory presets", fac);
+        PopupMenu m;
+        const int cur = currentProgram(), af = proc.getActiveFactory();
+        m.addSectionHeader ("Studio Wiga factory presets");
+        for (int i = 0; i < WharryProcessor::kNumFactory; ++i) m.addItem (101 + i, WharryProcessor::factory (i).name, true, i == af);
+        m.addSectionHeader ("Whammy programs");
+        for (int i = 0; i < wharry::kNumPrograms; ++i)
+            m.addItem (1 + i, String (i + 1) + "  " + wharry::program (i).name, true, i == cur && af < 0);
         Component::SafePointer<PedalView> sp (this);
         m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (r (kScreen).toNearestInt())), [sp] (int res)
         {
@@ -686,7 +724,7 @@ private:
     bool pressed = false;
 
     float drawnPedal = -1.0f, drawnSemis = 0.0f, drawnSmall[3] = { -1.0f, -1.0f, -1.0f };
-    int drawnProgram = -1;
+    int drawnProgram = -1, drawnFactory = -2;
     bool drawnChords = false, drawnActive = true;
     String drawnStatus;
 };

@@ -260,6 +260,7 @@ void WharryProcessor::togglePedalSwitch (const String& id)
 
 void WharryProcessor::selectWhammyProgram (int p)
 {
+    activeFactory = -1;
     setParamValue ("program", (float) jlimit (0, wharry::kNumPrograms - 1, p));
 }
 
@@ -267,6 +268,7 @@ void WharryProcessor::loadFactory (int index)
 {
     const auto& f = factory (index);
     currentFactory = jlimit (0, kNumFactory - 1, index);
+    activeFactory = currentFactory;
     setParamValue ("program", (float) f.program);
     setParamValue ("chords", f.chords ? 1.0f : 0.0f);
     setParamValue ("studio", f.studio ? 1.0f : 0.0f);

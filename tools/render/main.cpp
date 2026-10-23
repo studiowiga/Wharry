@@ -32,6 +32,16 @@ int main (int argc, char** argv)
     shot ("wharry_100pc_milieu", 0.55f, 15, true, true);
     shot ("wharry_100pc_basse", 1.0f, 1, false, true);
     shot ("wharry_100pc_bypass", 1.0f, 9, false, false);
+    proc.loadFactory (4);
+    {
+        proc.setParamValue ("pedal", 0.35f);
+        AudioBuffer<float> b (2, 256); MidiBuffer m;
+        for (int i = 0; i < 200; ++i) { b.clear(); proc.processBlock (b, m); }
+        for (int i = 0; i < 3; ++i) MessageManager::getInstance()->runDispatchLoopUntil (60);
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        File f (out + "/wharry_100pc_preset.png"); f.deleteFile();
+        FileOutputStream os (f); PNGImageFormat().writeImageToStream (img, os);
+    }
     ed.reset();
     return 0;
 }
