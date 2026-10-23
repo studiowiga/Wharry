@@ -42,6 +42,24 @@ int main (int argc, char** argv)
         File f (out + "/wharry_100pc_preset.png"); f.deleteFile();
         FileOutputStream os (f); PNGImageFormat().writeImageToStream (img, os);
     }
+    // mesure : temps de dessin de la fenêtre quand le plateau balaie toute sa course (1er passage = calcul des positions)
+    MessageManager::getInstance()->runDispatchLoopUntil (3000);   // laisse le timer précalculer au repos
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        double worst = 0, total = 0;
+        for (int i = 0; i <= 40; ++i)
+        {
+            proc.setParamValue ("pedal", (float) i / 40.0f);
+            AudioBuffer<float> b (2, 256); MidiBuffer m;
+            for (int k = 0; k < 60; ++k) { b.clear(); proc.processBlock (b, m); }
+            MessageManager::getInstance()->runDispatchLoopUntil (40);
+            const double t0 = Time::getMillisecondCounterHiRes();
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            const double dt = Time::getMillisecondCounterHiRes() - t0;
+            worst = jmax (worst, dt); total += dt;
+        }
+        std::printf ("mesure passage %d : dessin complet moyen %.1f ms, pire %.1f ms\n", pass + 1, total / 41.0, worst);
+    }
     ed.reset();
     return 0;
 }

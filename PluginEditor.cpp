@@ -113,6 +113,15 @@ namespace
             for (auto& f : frames) f = {};
             }
 
+        // calcule à l'avance une position manquante (appelé par le timer : jamais de gros calcul pendant un paint)
+        bool buildNextMissing()
+        {
+            if (scale < 0.0f) return false;
+            for (int i = 0; i < kFrames; ++i)
+                if (! frames[(size_t) i].isValid()) { frames[(size_t) i] = build ((float) i / (float) (kFrames - 1)); return true; }
+            return false;
+        }
+
         // t = 0 : orteil levé, t = 1 : orteil enfoncé
         const Image& frame (int i)
         {
@@ -599,6 +608,13 @@ private:
     void timerCallback() override
     {
         if (auto* ed = findParentComponentOfClass<WharryEditor>()) ed->useSoftwareRenderer();
+        // anti-gel : les positions du plateau sont précalculées au repos, une ou deux par tick (quelques ms)
+        if (getWidth() > 0)
+        {
+            treadle.prepare (s * physScale());
+            const double t0 = Time::getMillisecondCounterHiRes();
+            while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing()) {}
+        }
 
         const int prog = currentProgram();
         const bool chords = param ("chords"), active = param ("active");
