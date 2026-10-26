@@ -46,8 +46,8 @@ AudioProcessorValueTreeState::ParameterLayout WharryProcessor::createLayout()
     auto pct = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + " %"; });
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "tone", 1 }, "Tone", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "mix", 1 },  "Mix",  NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "MIDI Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "MIDI Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", false));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "pc", 1 }, "Respond to MIDI Program Change (Whammy 5 map)", true));
     return { p.begin(), p.end() };
@@ -114,16 +114,72 @@ void WharryProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void WharryProcessor::parameterChanged (const String& id, float v)
 {
-    if (id == "pedal") pedalLive = v;
+    if (id == "pedal") { notePedalRaw (v, false); pedalLive = mapPedal (v, false); }
 }
 
-// position MIDI brute (0..1) -> position pédale, avec calibration talon / pointe et inversion
-float WharryProcessor::mapPedal (float raw) const
+// position brute (0..1) -> position pédale :
+//  1. plage de la pédale : calibration manuelle (talon / pointe) si elle a été faite, sinon plage apprise
+//     automatiquement sur le MIDI reçu (une M-Audio EX-P envoie souvent ~2..116 au lieu de 0..127) ;
+//  2. petite zone morte aux deux butées : pédale relevée = exactement 0, enfoncée = exactement 100 % ;
+//  3. inversion éventuelle (MIDI seulement).
+float WharryProcessor::mapPedal (float raw, bool fromMidi) const
+{
+    float lo = pHeel->load(), hi = pToe->load();
+    const bool manual = lo > 0.001f || hi < 0.999f;
+    if (! manual && fromMidi && autoMax.load() - autoMin.load() > 0.4f) { lo = autoMin.load(); hi = autoMax.load(); }
+    float v = hi > lo + 0.01f ? (raw - lo) / (hi - lo) : raw;
+    constexpr float dz = 0.02f;
+    v = jlimit (0.0f, 1.0f, (v - dz) / (1.0f - 2.0f * dz));
+    return (fromMidi && pInvert->load() > 0.5f) ? 1.0f - v : v;
+}
+
+void WharryProcessor::notePedalRaw (float raw, bool fromMidi)
+{
+    if (fromMidi)
+    {
+        if (raw < autoMin.load()) autoMin = raw;
+        if (raw > autoMax.load()) autoMax = raw;
+    }
+    if (calibrating.load())
+    {
+        if (raw < calMin.load()) calMin = raw;
+        if (raw > calMax.load()) calMax = raw;
+    }
+    if (std::abs (raw - lastRaw.load()) > 0.004f) { lastRaw = raw; lastMoveMs = Time::getMillisecondCounter(); }
+}
+
+void WharryProcessor::startCalibration()
+{
+    calMin = 1.0f; calMax = 0.0f; lastMoveMs = Time::getMillisecondCounter();
+    calibrating = true;
+}
+
+void WharryProcessor::finishCalibration()
+{
+    if (! calibrating.exchange (false)) return;
+    const float lo = calMin.load(), hi = calMax.load();
+    if (hi - lo > 0.3f)
+    {
+        setParamValue ("heel", jlimit (0.0f, 1.0f, lo));
+        setParamValue ("toe", jlimit (0.0f, 1.0f, hi));
+        if (hi > 0.999f && lo < 0.001f) { setParamValue ("heel", 0.0f); setParamValue ("toe", 1.0f); }
+    }
+}
+
+void WharryProcessor::resetCalibration()
+{
+    calibrating = false;
+    autoMin = 1.0f; autoMax = 0.0f;
+    setParamValue ("heel", 0.0f); setParamValue ("toe", 1.0f);
+}
+
+String WharryProcessor::calibrationDescription() const
 {
     const float lo = pHeel->load(), hi = pToe->load();
-    float v = hi > lo + 0.01f ? (raw - lo) / (hi - lo) : raw;
-    v = jlimit (0.0f, 1.0f, v);
-    return pInvert->load() > 0.5f ? 1.0f - v : v;
+    auto cc = [] (float v) { return String (roundToInt (v * 127.0f)); };
+    if (lo > 0.001f || hi < 0.999f) return "calibrated " + cc (lo) + " - " + cc (hi);
+    if (autoMax.load() - autoMin.load() > 0.4f) return "auto " + cc (autoMin.load()) + " - " + cc (autoMax.load());
+    return "auto";
 }
 
 // ------------------------------------------------------------------ MIDI
@@ -144,7 +200,7 @@ void WharryProcessor::handleMidiMessage (const MidiMessage& m)
     if (m.isController())
     {
         const int c = m.getControllerNumber(), v = m.getControllerValue();
-        if (c == ccPedal.load()) pedalLive = mapPedal ((float) v / 127.0f);
+        if (c == ccPedal.load()) { const float raw = (float) v / 127.0f; notePedalRaw (raw, true); pedalLive = mapPedal (raw, true); }
         const bool on = v >= 64;
         if (c == ccLeft.load())  { if (on && ! leftHeld.load())  { pendingToggleLeft = true;  triggerAsyncUpdate(); } leftHeld = on; }
         if (c == ccRight.load()) { if (on && ! rightHeld.load()) { pendingToggleRight = true; triggerAsyncUpdate(); } rightHeld = on; }
@@ -298,6 +354,8 @@ void WharryProcessor::getStateInformation (MemoryBlock& dest)
     st.setProperty ("noteRight", noteRight.load(), nullptr);
     st.setProperty ("uiScaleIdx", uiScaleIdx.load(), nullptr);
     st.setProperty ("factory", currentFactory, nullptr);
+    st.setProperty ("autoMin", (double) autoMin.load(), nullptr);
+    st.setProperty ("autoMax", (double) autoMax.load(), nullptr);
     if (auto xml = st.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -315,7 +373,10 @@ void WharryProcessor::setStateInformation (const void* data, int size)
             noteRight = (int) st.getProperty ("noteRight", -1);
             uiScaleIdx = jlimit (-1, 2, (int) st.getProperty ("uiScaleIdx", -1));
             currentFactory = jlimit (0, kNumFactory - 1, (int) st.getProperty ("factory", 0));
-            pedalLive = pPedal->load();
+            autoMin = (float) (double) st.getProperty ("autoMin", 1.0);
+            autoMax = (float) (double) st.getProperty ("autoMax", 0.0);
+            calibrating = false;
+            pedalLive = mapPedal (pPedal->load(), false);
             leftHeld = false; rightHeld = false;
         }
 }

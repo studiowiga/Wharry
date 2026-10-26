@@ -71,6 +71,15 @@ public:
     void clearMidi (MidiTarget t);
     juce::String getMidiDescription (MidiTarget t) const;
 
+    // calibration de la pédale d'expression (pédales qui n'atteignent pas 0 / 127)
+    void startCalibration();
+    void finishCalibration();          // à appeler sur le thread de la fenêtre
+    void resetCalibration();
+    bool isCalibrating() const { return calibrating.load(); }
+    float calibrationSpan() const { return calMax.load() - calMin.load(); }
+    juce::uint32 msSincePedalMove() const { return juce::Time::getMillisecondCounter() - lastMoveMs.load(); }
+    juce::String calibrationDescription() const;
+
     std::atomic<int> uiScaleIdx { -1 };    // -1 = taille par défaut (67 %), 1 = 75 %, 2 = 100 %
 
     juce::AudioProcessorValueTreeState apvts;
@@ -80,7 +89,8 @@ private:
     void parameterChanged (const juce::String&, float) override;
     void handleAsyncUpdate() override;
     void handleMidiMessage (const juce::MidiMessage&);
-    float mapPedal (float raw01) const;
+    float mapPedal (float raw01, bool fromMidi) const;
+    void  notePedalRaw (float raw01, bool fromMidi);
     wharry::Settings currentSettings() const;
 
     wharry::Engine engine;
@@ -94,6 +104,10 @@ private:
     std::atomic<juce::uint32> lastBlockMs { 0 };
     std::atomic<int> learnTarget { 0 }, ccPedal { 11 }, ccLeft { -1 }, noteLeft { -1 }, ccRight { -1 }, noteRight { -1 };
     std::atomic<bool> leftHeld { false }, rightHeld { false };
+    std::atomic<float> autoMin { 1.0f }, autoMax { 0.0f };          // plage réellement envoyée par la pédale MIDI (apprise automatiquement)
+    std::atomic<bool> calibrating { false };
+    std::atomic<float> calMin { 1.0f }, calMax { 0.0f }, lastRaw { -1.0f };
+    std::atomic<juce::uint32> lastMoveMs { 0 };
 
     // changements demandés depuis le thread audio (MIDI) et appliqués sur le thread de la fenêtre
     std::atomic<int> pendingProgram { -1 }, pendingChords { -1 }, pendingActive { -1 };

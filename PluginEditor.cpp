@@ -392,6 +392,7 @@ public:
         const auto p = e.position / s;
         if (e.mods.isPopupMenu()) { showMenu (p); return; }
         drag = Drag::None;
+        if (kScreen.contains (p) && proc.isCalibrating()) { proc.finishCalibration(); return; }
         if (kScreen.contains (p))
         {
             // clic sur le programme précédent / suivant affiché = changement direct ; ailleurs = liste des presets
@@ -593,6 +594,9 @@ private:
     String statusText() const
     {
         const auto learn = proc.getLearnTarget();
+        if (proc.isCalibrating())
+            return proc.calibrationSpan() > 0.3f ? "CALIBRATION : OK - click the screen to finish"
+                                                 : "CALIBRATION : press the pedal fully down, then fully up";
         if (learn == MidiTarget::Pedal)   return "MIDI LEARN : move your expression pedal";
         if (learn == MidiTarget::LeftFsw) return "MIDI LEARN : CLASSIC / CHORDS switch";
         if (learn == MidiTarget::RightFsw)return "MIDI LEARN : ON / OFF footswitch";
@@ -608,6 +612,8 @@ private:
     void timerCallback() override
     {
         if (auto* ed = findParentComponentOfClass<WharryEditor>()) ed->useSoftwareRenderer();
+        // calibration : se termine seule 1,5 s après le dernier mouvement, une fois la course complète parcourue
+        if (proc.isCalibrating() && proc.calibrationSpan() > 0.3f && proc.msSincePedalMove() > 1500u) proc.finishCalibration();
         // anti-gel : les positions du plateau sont précalculées au repos, une ou deux par tick (quelques ms)
         if (getWidth() > 0)
         {
@@ -694,7 +700,8 @@ private:
             m.addItem (31, "MIDI learn pedal controller");
             m.addItem (32, "Reset to CC 11 (Whammy standard)");
             m.addItem (33, "Invert pedal direction", true, param ("invert"));
-            m.addItem (34, "Reset heel / toe calibration");
+            m.addItem (35, proc.isCalibrating() ? "Finish pedal calibration" : "Calibrate pedal (" + proc.calibrationDescription() + ")");
+            m.addItem (34, "Reset pedal calibration");
             m.addSeparator();
             m.addSectionHeader ("Chords engine");
             m.addItem (51, "Live (no latency)", true, ! param ("studio"));
@@ -719,7 +726,8 @@ private:
                 case 31: pr.startMidiLearn (MidiTarget::Pedal); break;
                 case 32: pr.clearMidi (MidiTarget::Pedal); break;
                 case 33: pr.togglePedalSwitch ("invert"); break;
-                case 34: pr.setParamValue ("heel", 0.0f); pr.setParamValue ("toe", 1.0f); break;
+                case 34: pr.resetCalibration(); break;
+                case 35: if (pr.isCalibrating()) pr.finishCalibration(); else pr.startCalibration(); break;
                 case 51: pr.setParamValue ("studio", 0.0f); break;
                 case 52: pr.setParamValue ("studio", 1.0f); break;
                 case 53: pr.togglePedalSwitch ("pc"); break;

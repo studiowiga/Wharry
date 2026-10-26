@@ -15,7 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = sys.argv[1]
 OUT = sys.argv[2]
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 TMP = os.path.dirname(OUT)
 
 for n, f in (("Pop", "Poppins-Regular"), ("PopL", "Poppins-Light"), ("PopM", "Poppins-Medium"), ("PopB", "Poppins-Bold")):
@@ -140,7 +140,8 @@ T = {
  fs_t="5. Footswitch, MIDI and expression pedals",
  fs=["<b>Footswitch</b>: click to switch the effect on or off; the LED shows the state. Switching programs or engines uses a short crossfade (no clicks).",
      "<b>Treadle look</b>: the drawing follows the tilt with light and shadow: raised toe catches the light and casts a shadow, a soft reflection slides along the rubber, and the toe darkens when pressed down.",
-     "<b>MIDI CC 11</b> moves the treadle directly, as on the original pedal (0 = toe up, 127 = toe down). Right-click the treadle: <b>MIDI learn pedal controller</b> (move your pedal), <b>Reset to CC 11</b>, <b>Invert pedal direction</b>, <b>Reset heel / toe calibration</b>. The heel / toe calibration parameters let a pedal that does not reach 0 or 127 cover the full range.",
+     "<b>MIDI CC 11</b> moves the treadle directly, as on the original pedal (0 = toe up, 127 = toe down). Right-click the treadle: <b>MIDI learn pedal controller</b> (move your pedal), <b>Reset to CC 11</b>, <b>Invert pedal direction</b>, <b>Calibrate pedal</b>, <b>Reset pedal calibration</b>.",
+     "<b>Pedal range</b>: many expression pedals never send exactly 0 and 127 (an M-Audio EX-P on an M-Vave Chocolate Plus often sends about 2 to 116). Wharry learns the real range automatically the first time you press the pedal fully down and up, and adds a small dead zone at both ends: toe up is exactly 0, toe down exactly the full interval. If the pedal is linked through your DAW instead of CC 11, use <b>Calibrate pedal</b>: press it fully down and up; the calibration ends by itself (or click the screen).",
      "Right-click the footswitch or the CLASSIC · CHORDS switch to <b>MIDI learn</b> a CC or note for them (or clear the assignment).",
      "<b>Program Change</b> (can be disabled in the right-click menu), same logic as the Whammy 5: PC 1-21 = program 1-21 in Classic, PC 22-42 = same programs bypassed, PC 43-63 = Chords, PC 64-84 = Chords bypassed.",
      "Every control is also a DAW parameter: Program (selector), Expression Pedal, Classic / Chords, Effect On, Chords Studio HQ engine, Glide, Tone, Mix, MIDI pedal calibration heel / toe, MIDI pedal invert, Respond to MIDI Program Change. In Reaper you can also link them to any controller with <i>Parameter modulation / MIDI link</i>."],
@@ -164,7 +165,9 @@ T = {
  hist=[["1.0.0", "First version: Whammy 5 engine, MIDI, temporary visual"], ["1.1.0", "User design, treadle animated in perspective, GLIDE / TONE / MIX, live screen"],
        ["1.2.0", "Program LEDs and labels removed, programs shown on the screen"], ["1.3.0", "Larger screen, selector centred on its left"],
        ["1.4.0", "Pedal fills the window (544 x 495), smaller jacks, IN / OUT engraved on the sides, more realistic treadle tilt synchronised with MIDI / automation, status line in the screen"],
-       ["1.5.0", "Rounded pedal corners, IN / OUT moved away from the edges, treadle lighting (moving reflection, light and shadow following the tilt), presets selectable from the screen (preset list, previous / next program)"]],
+       ["1.5.0", "Rounded pedal corners, IN / OUT moved away from the edges, treadle lighting (moving reflection, light and shadow following the tilt), presets selectable from the screen (preset list, previous / next program)"],
+       ["1.5.1", "Anti-freeze: treadle positions precomputed in the background"],
+       ["1.6.0", "Expression pedal range learnt automatically (exact 0 / full interval with pedals that send e.g. 2-116), pedal calibration mode, end dead zones"]],
  updown_cap="Treadle toe up (left) and toe down (right): the drawing follows the MIDI pedal and automation in real time.",
  ver_h=["Version", "Changes"], spec_h=["", ""]),
 "fr": dict(
@@ -199,7 +202,8 @@ T = {
  fs_t="5. Footswitch, MIDI et pédales d'expression",
  fs=["<b>Footswitch</b> : un clic active ou coupe l'effet ; la LED indique l'état. Les changements de programme ou de moteur se font avec un fondu court (pas de clic).",
      "<b>Rendu du plateau</b> : le dessin suit l'inclinaison avec lumière et ombres : la pointe levée prend la lumière et projette une ombre, un reflet doux glisse sur le caoutchouc, et la pointe s'assombrit quand elle est enfoncée.",
-     "Le <b>MIDI CC 11</b> déplace directement le plateau, comme sur la pédale d'origine (0 = orteil levé, 127 = orteil enfoncé). Clic droit sur le plateau : <b>MIDI learn pedal controller</b> (bougez votre pédale), <b>Reset to CC 11</b>, <b>Invert pedal direction</b>, <b>Reset heel / toe calibration</b>. Les paramètres de calibration talon / pointe permettent à une pédale qui n'atteint pas 0 ou 127 de couvrir toute la course.",
+     "Le <b>MIDI CC 11</b> déplace directement le plateau, comme sur la pédale d'origine (0 = orteil levé, 127 = orteil enfoncé). Clic droit sur le plateau : <b>MIDI learn pedal controller</b> (bougez votre pédale), <b>Reset to CC 11</b>, <b>Invert pedal direction</b>, <b>Calibrate pedal</b>, <b>Reset pedal calibration</b>.",
+     "<b>Course de la pédale</b> : beaucoup de pédales d'expression n'envoient jamais exactement 0 et 127 (une M-Audio EX-P sur une M-Vave Chocolate Plus envoie souvent environ 2 à 116). Wharry apprend tout seul la course réelle dès que vous enfoncez puis relevez la pédale à fond, et ajoute une petite zone morte aux deux butées : pédale relevée = exactement 0, enfoncée = exactement l'intervalle complet. Si la pédale est liée par le DAW au lieu du CC 11, utilisez <b>Calibrate pedal</b> : enfoncez-la puis relevez-la à fond ; la calibration se termine seule (ou cliquez sur l'écran).",
      "Clic droit sur le footswitch ou sur l'inverseur CLASSIC · CHORDS : <b>MIDI learn</b> d'un CC ou d'une note (ou suppression de l'assignation).",
      "<b>Program Change</b> (désactivable dans le menu clic droit), même logique que la Whammy 5 : PC 1-21 = programmes 1-21 en Classic, PC 22-42 = mêmes programmes en bypass, PC 43-63 = Chords, PC 64-84 = Chords en bypass.",
      "Chaque commande est aussi un paramètre du DAW : Program (selector), Expression Pedal, Classic / Chords, Effect On, Chords Studio HQ engine, Glide, Tone, Mix, MIDI Pedal Calibration Heel / Toe, MIDI Pedal Invert, Respond to MIDI Program Change. Dans Reaper, vous pouvez aussi les lier à n'importe quel contrôleur via <i>Parameter modulation / MIDI link</i>."],
@@ -223,7 +227,9 @@ T = {
  hist=[["1.0.0", "Première version : moteur Whammy 5, MIDI, visuel provisoire"], ["1.1.0", "Design de l'utilisateur, plateau animé en perspective, GLIDE / TONE / MIX, écran en direct"],
        ["1.2.0", "LED et noms des programmes supprimés, programmes affichés sur l'écran"], ["1.3.0", "Écran agrandi, sélecteur centré à sa gauche"],
        ["1.4.0", "Pédale agrandie dans la fenêtre (544 x 495), jacks plus petits, IN / OUT gravés sur les tranches, bascule du plateau plus réaliste et synchronisée avec le MIDI / les automations, ligne d'état dans l'écran"],
-       ["1.5.0", "Coins de la pédale arrondis, IN / OUT éloignés des bords, éclairage du plateau (reflet mobile, lumière et ombres qui suivent l'inclinaison), presets à choisir depuis l'écran (liste des presets, programme précédent / suivant)"]],
+       ["1.5.0", "Coins de la pédale arrondis, IN / OUT éloignés des bords, éclairage du plateau (reflet mobile, lumière et ombres qui suivent l'inclinaison), presets à choisir depuis l'écran (liste des presets, programme précédent / suivant)"],
+       ["1.5.1", "Anti-gel : positions du plateau précalculées en arrière-plan"],
+       ["1.6.0", "Course de la pédale d'expression apprise automatiquement (0 et intervalle complet exacts avec les pédales qui envoient par ex. 2-116), mode de calibration, zones mortes aux butées"]],
  updown_cap="Plateau orteil levé (à gauche) et orteil enfoncé (à droite) : le dessin suit la pédale MIDI et les automations en temps réel.",
  ver_h=["Version", "Changements"], spec_h=["", ""]),
 }

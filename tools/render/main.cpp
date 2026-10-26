@@ -60,6 +60,26 @@ int main (int argc, char** argv)
         }
         std::printf ("mesure passage %d : dessin complet moyen %.1f ms, pire %.1f ms\n", pass + 1, total / 41.0, worst);
     }
+    // test pédale : M-Audio EX-P qui n'envoie que 2..116 en CC 11 sur le programme OCT UP
+    {
+        proc.setParamValue ("program", 1.0f); proc.setParamValue ("smooth", 0.0f); proc.setParamValue ("active", 1.0f);
+        auto sendCC = [&] (int v)
+        {
+            AudioBuffer<float> b (2, 256); MidiBuffer m; m.addEvent (MidiMessage::controllerEvent (1, 11, v), 0);
+            proc.processBlock (b, m);
+            for (int k = 0; k < 40; ++k) { MidiBuffer e; b.clear(); proc.processBlock (b, e); }
+            return proc.getSemitones();
+        };
+        { const float a = sendCC (2); const float b2 = sendCC (116); std::printf ("test pédale avant apprentissage : relevée %+.2f st, enfoncée %+.2f st (%s)\n", a, b2, proc.calibrationDescription().toRawUTF8()); }
+        for (int v = 2; v <= 116; v += 6) sendCC (v);
+        for (int v = 116; v >= 2; v -= 6) sendCC (v);
+        std::printf ("test pédale après un aller-retour : relevée %+.2f st, mi-course %+.2f st, enfoncée %+.2f st\n", sendCC (2), sendCC (59), sendCC (116));
+        proc.startCalibration();
+        for (int v = 6; v <= 110; v += 4) sendCC (v);
+        for (int v = 110; v >= 6; v -= 4) sendCC (v);
+        proc.finishCalibration();
+        std::printf ("test calibration manuelle (6..110) : relevée %+.2f st, enfoncée %+.2f st\n", sendCC (6), sendCC (110));
+    }
     ed.reset();
     return 0;
 }
