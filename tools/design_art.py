@@ -1,7 +1,7 @@
 # Wharry : prépare les images du plugin à partir du design de l'utilisateur (design/wharry_design_source.png, 1390 x 1132)
 #   background.png   : fond 1020 x 928 (textes réécrits, LED / écran vidés, logo Studio Wiga, jacks Studio Wiga)
 #   treadle_down.png : calque du plateau à plat (orteil enfoncé) ; le plugin calcule les autres positions en perspective
-#   fs_on.png / fs_off.png, toggle_r.png / toggle_l.png : sprites des commandes
+#   fs_on.png / fs_off.png, toggle_lever.png : sprites des commandes (le levier de l'inverseur coulisse)
 #   tools/layout.txt : coordonnées des commandes dans le repère 1020 x 928 (reprises dans PluginEditor.cpp)
 #   design/apercu_treadle_up.png : aperçu de la position orteil levé
 import os, math
@@ -140,7 +140,7 @@ def samp(prof, d):
     d = min(max(d, 0.0), len(prof) - 1.001); i = int(d); f = d - i
     return prof[i] * (1 - f) + prof[i + 1] * f
 
-def round_corner(img, ox, oy, sx, sy, L, R, F, xmax=None, keep=None, row_copy=True, inpaint_panel=False):
+def round_corner(img, ox, oy, sx, sy, L, R, F, xmax=None, keep=None, row_copy=True, inpaint_panel=False, frame=None):
     """ox, oy : coin extérieur virtuel ; sx, sy : sens vers l'intérieur ; L : jambe du pan coupé ;
     R : rayon de l'arrondi ; F : épaisseur du cadre (jusqu'au panneau)"""
     src = img.astype(np.float32); out = src.copy()
@@ -162,7 +162,8 @@ def round_corner(img, ox, oy, sx, sy, L, R, F, xmax=None, keep=None, row_copy=Tr
             else:
                 d = min(uc, vc); w = 1.0 / (1.0 + math.exp(-(uc - vc) / 5.0))   # raccord d'onglet adouci
             if d < -0.6: continue                                  # dehors : fond d'origine
-            if d < F + 2:
+            FR = F if frame is None else frame                     # épaisseur réelle du cadre (le reste est du panneau)
+            if d < FR + 2:
                 val = samp(pv, d) * (1 - w) + samp(ph, d) * w
             elif inpaint_panel:
                 pmask[y, x] = 255; val = src[y, x]
@@ -170,7 +171,7 @@ def round_corner(img, ox, oy, sx, sy, L, R, F, xmax=None, keep=None, row_copy=Tr
                 if row_copy: xs, ys = x + sx * int(lim + 4), y
                 else:        xs, ys = x, y + sy * int(lim + 4)
                 val = src[int(ys), int(xs)]
-                if d < F + 4: val = val * ((d - F - 2) / 2) + (samp(pv, d) * (1 - w) + samp(ph, d) * w) * (1 - (d - F - 2) / 2)
+                if d < FR + 4: val = val * ((d - FR - 2) / 2) + (samp(pv, d) * (1 - w) + samp(ph, d) * w) * (1 - (d - FR - 2) / 2)
             blend = min(1.0, max(0.0, (lim + 6 - (uc + vc)) / 6.0))   # raccord progressif vers l'original
             a = min(1.0, d + 0.6) * blend
             out[y, x] = val * a + src[y, x] * (1 - a)
@@ -181,13 +182,103 @@ def round_corner(img, ox, oy, sx, sy, L, R, F, xmax=None, keep=None, row_copy=Tr
 RC = 20                                                      # rayon des coins (pixels du design)
 img = inpainted
 img = round_corner(img, 1211, 46, -1, +1, 62, RC, 14)                               # haut droit (panneau)
-img = round_corner(img, 1211, 1057, -1, -1, 72, RC, 30, row_copy=False)                             # bas droit (pièce d'angle supprimée)
+img = round_corner(img, 1211, 1057, -1, -1, 72, RC, 30, row_copy=False, frame=16)                             # bas droit (pièce d'angle supprimée)
 screw = lambda x, y: math.hypot(x - 212, y - 1002) < 15
 img = round_corner(img, 162, 1057, +1, -1, 56, RC, 30, keep=screw, inpaint_panel=True)                  # bas gauche (boîtier)
 img = round_corner(img, 164, 70, +1, +1, 50, RC, 16, xmax=204, row_copy=False)      # haut gauche (boîtier, sous le plateau)
 img = round_corner(img, 204, 51, +1, +1, 16, 12, 22)                                # coins hauts du plateau
 img = round_corner(img, 708, 51, -1, +1, 16, 12, 22)
 inpainted = img
+
+# ---------- 1c) retouches : halo de la LED, fin du trait, fente de l'inverseur vide, vis ajoutées ----------
+TEX = A[365:530, 828:878].astype(np.float32); TEX = TEX - cv2.GaussianBlur(TEX, (0, 0), 6)
+def panel_rebuild(img, region_mask, ring):
+    """panneau brossé reconstruit = dégradé de couleur ajusté sur l'anneau propre 'ring' + grain brossé"""
+    ys, xs = np.nonzero(ring)
+    X = np.stack([xs, ys, np.ones_like(xs)], 1).astype(np.float64)
+    coef = np.linalg.lstsq(X, img[ys, xs].astype(np.float64), rcond=None)[0]
+    yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+    out = img.astype(np.float32)
+    sel = region_mask > 0.001
+    py, px = yy[sel], xx[sel]
+    plane = np.stack([px, py, np.ones_like(px)], 1).astype(np.float64) @ coef
+    tex = TEX[py % TEX.shape[0], px % TEX.shape[1]]
+    synth = np.clip(plane + tex, 0, 255)
+    a = region_mask[sel][:, None]
+    out[sel] = synth * a + out[sel] * (1 - a)
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+yy0, xx0 = np.mgrid[0:A.shape[0], 0:A.shape[1]]
+# halo de la LED du footswitch (visible quand elle est éteinte) : disque de panneau neuf, bord fondu
+def panel_copy(img, region_mask, dx, ring):
+    """panneau repris sur la même rangée, décalé de dx (brossage continu), avec correction du dégradé de couleur"""
+    ys, xs = np.nonzero(ring)
+    X = np.stack([xs, ys, np.ones_like(xs)], 1).astype(np.float64)
+    coef = np.linalg.lstsq(X, img[ys, xs].astype(np.float64), rcond=None)[0]
+    out = img.astype(np.float32)
+    sel = region_mask > 0.001
+    py, px = np.nonzero(sel)
+    plane = lambda x, y: np.stack([x, y, np.ones_like(x)], 1).astype(np.float64) @ coef
+    val = img[py, px + dx].astype(np.float64) - plane(px + dx, py) + plane(px, py)
+    a = region_mask[py, px][:, None]
+    out[py, px] = np.clip(val, 0, 255) * a + out[py, px] * (1 - a)
+    return np.clip(out, 0, 255).astype(np.uint8)
+rL = np.hypot(xx0 - 1063, yy0 - 873)
+red_ = (inpainted[..., 0].astype(int) - inpainted[..., 1].astype(int)) > 25          # pixels de panneau rouge uniquement
+inpainted = panel_copy(inpainted, np.clip((50 - rL) / 12.0, 0, 1).astype(np.float32), 72, (rL > 52) & (rL < 70) & red_)
+# fin du trait décoratif du bas (il venait buter dans le coin) : effacé sous la future vis
+lm = np.zeros(A.shape[:2], np.float32); lm[1018:1036, 1050:1188] = 1.0; lm = cv2.GaussianBlur(lm, (0, 0), 2)
+ring = np.zeros(A.shape[:2], bool); ring[1008:1016, 1050:1188] = True; ring[1040:1046, 1050:1188] = True
+inpainted = panel_rebuild(inpainted, lm, ring)
+
+# inverseur CLASSIC / CHORDS : la fente est vidée, le levier devient un sprite qui coulisse (éclairage conservé)
+LEV = (1094, 145, 1131, 177)                       # levier (chapeau strié + flanc + base) dans le design
+SLOT_C, TRAVEL = 1114.0, 9.0                       # centre de la fente, course de part et d'autre
+lev = A[LEV[1]:LEV[3], LEV[0]:LEV[2]]
+lmask = np.zeros(A.shape[:2], np.uint8); lmask[LEV[1]:LEV[3], LEV[0]:LEV[2]] = 255
+inpainted = cv2.inpaint(inpainted, lmask, 5, cv2.INPAINT_TELEA)
+# intérieur de la fente : nuance verticale reprise des bords libres (gauche / droite) pour une fente régulière
+for y in range(LEV[1], LEV[3]):
+    a_, b_ = inpainted[y, 1086:1092].astype(np.float32).mean(0), inpainted[y, 1136:1142].astype(np.float32).mean(0)
+    for x in range(LEV[0], LEV[2]):
+        t = (x - LEV[0]) / (LEV[2] - LEV[0]); inpainted[y, x] = (a_ * (1 - t) + b_ * t).astype(np.uint8)
+la_ = np.ones(lev.shape[:2], np.float32); la_[:, 0] = 0.5; la_[:, -1] = 0.5; la_[0, :] *= 0.6; la_[-1, :] *= 0.4
+Image.fromarray(np.dstack([lev, (la_ * 255).astype(np.uint8)]), "RGBA").resize(
+    (round((LEV[2] - LEV[0]) * S), round((LEV[3] - LEV[1]) * S)), Image.LANCZOS).save(os.path.join(ROOT, "toggle_lever.png"))
+
+# footswitch : ombre de contact sur le panneau (lumière en haut à gauche) + chapeau mobile en sprite
+FSC, FS_R, CAP_R = (945, 859), 76, 45
+rF = np.hypot(xx0 - FSC[0] - 5, yy0 - FSC[1] - 8)
+shF = cv2.GaussianBlur(((rF < FS_R)).astype(np.float32), (0, 0), 7) * 0.55
+shF[np.hypot(xx0 - FSC[0], yy0 - FSC[1]) < FS_R - 1] = 0
+inpainted = np.clip(inpainted.astype(np.float32) * (1 - shF[..., None]), 0, 255).astype(np.uint8)
+Rc = CAP_R + 2
+cap = A[FSC[1] - Rc:FSC[1] + Rc, FSC[0] - Rc:FSC[0] + Rc]
+yyc, xxc = np.mgrid[-Rc:Rc, -Rc:Rc]
+ca = np.clip((CAP_R - np.hypot(xxc + 0.5, yyc + 0.5)) / 1.5 + 0.5, 0, 1)
+Image.fromarray(np.dstack([cap, (ca * 255).astype(np.uint8)]), "RGBA").resize((round(2 * Rc * S), round(2 * Rc * S)), Image.LANCZOS).save(os.path.join(ROOT, "fs_cap.png"))
+
+# vis : copie de la vis du haut à droite (même taille, même éclairage), en bas à droite du panneau
+#       et sous le plateau (bas du plateau, aux mêmes abscisses que ses deux vis du haut)
+def paste_screw(img, src_c, dst_c, r, dim=None):
+    sx_, sy_ = src_c; dx_, dy_ = dst_c; R_ = r + 7
+    if dim is None:                                  # même rapport de luminosité que le panneau autour
+        rs = np.hypot(xx0 - sx_, yy0 - sy_); rd = np.hypot(xx0 - dx_, yy0 - dy_)
+        ringS = (rs > R_ + 2) & (rs < R_ + 10) & ((A[..., 0].astype(int) - A[..., 1].astype(int)) > 25)
+        ringD = (rd > R_ + 2) & (rd < R_ + 10) & ((img[..., 0].astype(int) - img[..., 1].astype(int)) > 25)
+        dim = float(np.clip(img[ringD][:, 0].mean() / max(1.0, A[ringS][:, 0].mean()), 0.55, 1.0))
+    spr = A[sy_ - R_:sy_ + R_, sx_ - R_:sx_ + R_].astype(np.float32)
+    redpx = ((spr[..., 0] - spr[..., 1]) > 25)[..., None]
+    spr = spr * np.where(redpx, dim, max(dim, 0.82))      # la cuvette rouge suit le panneau, la tête métal reste brillante
+    yy_, xx_ = np.mgrid[-R_:R_, -R_:R_]
+    al = np.clip((R_ - 1.5 - np.hypot(xx_ + 0.5, yy_ + 0.5)) / 3.0, 0, 1)[..., None]
+    out = img.astype(np.float32)
+    sl_ = (slice(dy_ - R_, dy_ + R_), slice(dx_ - R_, dx_ + R_))
+    out[sl_] = spr * al + out[sl_] * (1 - al)
+    return np.clip(out, 0, 255).astype(np.uint8)
+inpainted = paste_screw(inpainted, (1130, 92), (1130, 1004), 20)   # rapport de luminosité automatique
+inpainted = paste_screw(inpainted, (258, 100), (258, 979), 21)
+inpainted = paste_screw(inpainted, (658, 100), (658, 979), 21)
 
 clean = Image.fromarray(inpainted)
 
@@ -276,9 +367,9 @@ def sprite(box, name, flip=False):
     if flip: im = im.transpose(Image.FLIP_LEFT_RIGHT)
     im.save(os.path.join(ROOT, name))
 FS = (868, 784, 1020, 936)
-sprite(FS, "fs_on.png"); sprite(FS, "fs_off.png")          # footswitch métal (l'état est donné par la LED)
+
 TG = (1082, 140, 1144, 184)
-sprite(TG, "toggle_r.png"); sprite(TG, "toggle_l.png", flip=True)
+
 
 with open(os.path.join(ROOT, "tools", "layout.txt"), "w") as fo:
     def P(n, x, y): px, py = C(x, y); fo.write(f"{n} {px:.1f} {py:.1f}\n")
@@ -289,6 +380,8 @@ with open(os.path.join(ROOT, "tools", "layout.txt"), "w") as fo:
     P("screen0", SCR[0], SCR[1]); P("screen1", SCR[2], SCR[3])
     P("fs0", FS[0], FS[1]); P("fs1", FS[2], FS[3]); P("fsled", 1063, 873)
     P("tg0", TG[0], TG[1]); P("tg1", TG[2], TG[3])
+    P("fsc", FSC[0], FSC[1]); fo.write(f"capR {CAP_R * S:.2f} capSprR {(CAP_R + 2) * S:.2f}\n")
+    P("lev0", LEV[0], LEV[1]); P("lev1", LEV[2], LEV[3]); P("slotC", SLOT_C, 0); fo.write(f"travel {TRAVEL * S:.2f}\n")
     P("plateTL", 203, 51); P("plateBR", 708, 1012)
     fo.write(f"ledR {7.5 * S:.1f} S {S}\n")
 print("ok")

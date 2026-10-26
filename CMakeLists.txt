@@ -6,7 +6,7 @@ if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
 endif()
 
-project(Wharry VERSION 1.6.0)
+project(Wharry VERSION 1.7.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +29,7 @@ endif()
 # visuel de la pédale intégré au plugin (aucun fichier externe à l'exécution)
 juce_add_binary_data(WharryAssets SOURCES
   background.png treadle_down.png
-  fs_on.png fs_off.png toggle_l.png toggle_r.png
+  fs_cap.png toggle_lever.png
   fonts/Poppins-Medium.ttf fonts/Poppins-Bold.ttf)
 
 if(APPLE)
@@ -47,7 +47,7 @@ juce_add_plugin(Wharry
   AU_MAIN_TYPE kAudioUnitType_MusicEffect
   VST3_CATEGORIES Fx Pitch Shift
   PRODUCT_NAME "Wharry"
-  VERSION 1.6.0
+  VERSION 1.7.0
   DESCRIPTION "Pitch-shift expression pedal (Whammy-style) - double pedal format"
   IS_SYNTH FALSE
   NEEDS_MIDI_INPUT TRUE

@@ -21,6 +21,10 @@ namespace
     const char* const kSmallId[3] = { "smooth", "tone", "mix" };
     const Rectangle<float> kScreen (709.0f, 198.7f, 223.2f, 247.7f);
     const Rectangle<float> kFs (668.6f, 679.3f, 133.5f, 133.5f);          // footswitch ON / OFF
+    const Point<float> kFsC (736.2f, 745.2f);                                // centre du chapeau mobile du footswitch
+    constexpr float kFsCapR = 39.54f, kFsCapSprR = 41.29f;
+    const Rectangle<float> kLever (867.1f, 117.9f, 32.5f, 28.1f);          // levier de l'inverseur (position du design)
+    constexpr float kSlotCx = 884.7f, kTravel = 7.91f;                      // centre de la fente, course du levier
     const Point<float> kFsLed (839.9f, 757.5f);
     const Rectangle<float> kToggle (856.6f, 113.5f, 54.5f, 38.6f);       // inverseur CLASSIC / CHORDS
     const Rectangle<float> kToggleHit = kToggle.expanded (14.0f, 22.0f);
@@ -321,10 +325,8 @@ public:
     explicit PedalView (WharryProcessor& p) : proc (p)
     {
         bg.src      = loadPng (BinaryData::background_png, BinaryData::background_pngSize);
-        fsOn.src    = loadPng (BinaryData::fs_on_png, BinaryData::fs_on_pngSize);
-        fsOff.src   = loadPng (BinaryData::fs_off_png, BinaryData::fs_off_pngSize);
-        tgL.src     = loadPng (BinaryData::toggle_l_png, BinaryData::toggle_l_pngSize);
-        tgR.src     = loadPng (BinaryData::toggle_r_png, BinaryData::toggle_r_pngSize);
+        fsCap.src   = loadPng (BinaryData::fs_cap_png, BinaryData::fs_cap_pngSize);
+        lever.src   = loadPng (BinaryData::toggle_lever_png, BinaryData::toggle_lever_pngSize);
         treadle.setSource (loadPng (BinaryData::treadle_down_png, BinaryData::treadle_down_pngSize));
         typeface = Typeface::createSystemTypefaceFor (BinaryData::PoppinsMedium_ttf, BinaryData::PoppinsMedium_ttfSize);
         typefaceBold = Typeface::createSystemTypefaceFor (BinaryData::PoppinsBold_ttf, BinaryData::PoppinsBold_ttfSize);
@@ -372,16 +374,37 @@ public:
             g.drawLine ({ c + dir * (kSmallCapR * 0.30f * s), c + dir * (kSmallCapR * 0.90f * s) }, 2.6f * s);
         }
 
-        // ---- inverseur CLASSIC / CHORDS ----
-        g.drawImage ((drawnChords ? tgR : tgL).get (ps), r (kToggle));
-
-        // ---- footswitch + LED ----
+        // ---- inverseur CLASSIC / CHORDS : le levier coulisse dans la fente (même éclairage, aucune image retournée) ----
         {
-            auto fr2 = r (kFs);
-            if (pressed) fr2 = fr2.withSizeKeepingCentre (fr2.getWidth() * 0.965f, fr2.getHeight() * 0.965f).translated (0, 1.5f * s);
-            g.drawImage ((drawnActive ? fsOn : fsOff).get (ps), fr2);
-            drawLed (g, kFsLed, drawnActive ? 1.0f : 0.0f);
+            const float dx = kSlotCx + (2.0f * tgAnim - 1.0f) * kTravel - kLever.getCentreX();
+            g.drawImage (lever.get (ps), r (kLever.translated (dx, 0.0f)));
         }
+
+        // ---- footswitch : la bague et l'écrou restent fixes, seul le chapeau s'enfonce ----
+        if (fsPress > 0.001f)
+        {
+            const auto c = r (kFsC);
+            const float rr = kFsCapR * s, p = fsPress;
+            // fond du logement découvert par le chapeau qui descend
+            g.setColour (Colour (0xff0d0c0e).withAlpha (0.92f * p));
+            g.fillEllipse (c.x - rr, c.y - rr, 2 * rr, 2 * rr);
+            // chapeau : plus loin de l'objectif (un peu plus petit), légèrement plus bas, moins éclairé
+            const float sc = 1.0f - 0.075f * p, R = kFsCapSprR * s * sc;
+            const Point<float> cc (c.x + 0.4f * s * p, c.y + 2.0f * s * p);
+            g.drawImage (fsCap.get (ps), Rectangle<float> (cc.x - R, cc.y - R, 2 * R, 2 * R));
+            const float ri = kFsCapR * s * sc;
+            g.setColour (Colours::black.withAlpha (0.28f * p));
+            g.fillEllipse (cc.x - ri, cc.y - ri, 2 * ri, 2 * ri);
+            // ombre portée de la bague sur le chapeau enfoncé (lumière en haut à gauche)
+            ColourGradient sh (Colours::black.withAlpha (0.55f * p), cc.x - ri * 0.75f, cc.y - ri * 0.75f,
+                               Colours::transparentBlack, cc.x + ri * 0.1f, cc.y + ri * 0.1f, false);
+            g.setGradientFill (sh);
+            Path ring; ring.addEllipse (cc.x - ri, cc.y - ri, 2 * ri, 2 * ri);
+            ring.addEllipse (cc.x - ri + 3.0f * s * p, cc.y - ri + 3.5f * s * p, 2 * ri - 2.5f * s * p, 2 * ri - 2.5f * s * p);
+            ring.setUsingNonZeroWinding (false);
+            g.fillPath (ring);
+        }
+        drawLed (g, kFsLed, drawnActive ? 1.0f : 0.0f);
 
         drawScreen (g);
     }
@@ -411,7 +434,7 @@ public:
                 return;
             }
         if (kToggleHit.contains (p)) { proc.togglePedalSwitch ("chords"); return; }
-        if (kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.45f) { pressed = true; proc.togglePedalSwitch ("active"); repaint (r (kFs).toNearestInt().expanded (4)); return; }
+        if (kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.45f) { pressed = true; proc.togglePedalSwitch ("active"); return; }
         if (kPlate.contains (p))
         {
             drag = Drag::Pedal; dragStartY = p.y;
@@ -446,7 +469,7 @@ public:
         if (drag == Drag::Pedal) if (auto* par = proc.apvts.getParameter ("pedal")) par->endChangeGesture();
         if (drag >= Drag::Small0) if (auto* par = proc.apvts.getParameter (kSmallId[(int) drag - (int) Drag::Small0])) par->endChangeGesture();
         drag = Drag::None;
-        if (pressed) { pressed = false; repaint (r (kFs).toNearestInt().expanded (4)); }
+        pressed = false;
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
@@ -642,10 +665,26 @@ private:
         }
         if (chords != drawnChords || active != drawnActive)
         {
+            if (active != drawnActive && ! pressed) flashTicks = 4;     // commande MIDI / automation : le chapeau plonge brièvement
             drawnChords = chords; drawnActive = active; screen = true;
-            repaint (r (kToggle).toNearestInt().expanded (3));
-            repaint (r (kFs).toNearestInt().expanded (4));
             repaint (ledArea (kFsLed));
+        }
+        // animations : levier qui coulisse, chapeau du footswitch qui s'enfonce et remonte
+        {
+            const float tgT = drawnChords ? 1.0f : 0.0f;
+            if (std::abs (tgAnim - tgT) > 0.001f)
+            {
+                const float d = tgT - tgAnim, st2 = 0.25f;
+                tgAnim = std::abs (d) <= st2 ? tgT : tgAnim + (d > 0 ? st2 : -st2);
+                repaint (r (kLever.withX (kSlotCx - kTravel - kLever.getWidth() * 0.5f).withWidth (kLever.getWidth() + 2.0f * kTravel)).toNearestInt().expanded (3));
+            }
+            if (flashTicks > 0) --flashTicks;
+            const float fsT = (pressed || flashTicks > 0) ? 1.0f : 0.0f;
+            if (std::abs (fsPress - fsT) > 0.001f)
+            {
+                fsPress = fsT > fsPress ? jmin (fsT, fsPress + 0.5f) : jmax (fsT, fsPress - 0.34f);
+                repaint (r (Rectangle<float> (kFsC.x - kFsCapSprR, kFsC.y - kFsCapSprR, 2 * kFsCapSprR, 2 * kFsCapSprR)).toNearestInt().expanded (4));
+            }
         }
         for (int i = 0; i < 3; ++i)
         {
@@ -737,7 +776,7 @@ private:
     }
 
     WharryProcessor& proc;
-    ScaledCache bg, fsOn, fsOff, tgL, tgR;
+    ScaledCache bg, fsCap, lever;
     TreadleWarp treadle;
     Typeface::Ptr typeface, typefaceBold;
     float s = kDefaultScale * kRefH / (float) kH;
@@ -746,6 +785,8 @@ private:
     float dragStartY = 0, dragStartVal = 0;
     int dragStartProg = 0;
     bool pressed = false;
+    float tgAnim = 0.0f, fsPress = 0.0f;
+    int flashTicks = 0;
 
     float drawnPedal = -1.0f, drawnSemis = 0.0f, drawnSmall[3] = { -1.0f, -1.0f, -1.0f };
     int drawnProgram = -1, drawnFactory = -2;

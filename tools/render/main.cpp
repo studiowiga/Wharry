@@ -60,6 +60,20 @@ int main (int argc, char** argv)
         }
         std::printf ("mesure passage %d : dessin complet moyen %.1f ms, pire %.1f ms\n", pass + 1, total / 41.0, worst);
     }
+    // press_test : footswitch au repos / enfoncé, levier à gauche / à droite
+    {
+        auto snap = [&] (const String& name)
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            File f (out + "/" + name + ".png"); f.deleteFile(); FileOutputStream os (f); PNGImageFormat().writeImageToStream (img, os);
+        };
+        proc.setParamValue ("chords", 0.0f); proc.setParamValue ("active", 1.0f);
+        MessageManager::getInstance()->runDispatchLoopUntil (600); snap ("fs_repos_classic");
+        proc.setParamValue ("active", 0.0f);                 // bascule MIDI simulée : le chapeau plonge
+        MessageManager::getInstance()->runDispatchLoopUntil (75); snap ("fs_enfonce");
+        proc.setParamValue ("chords", 1.0f);
+        MessageManager::getInstance()->runDispatchLoopUntil (600); snap ("fs_repos_chords");
+    }
     // test pédale : M-Audio EX-P qui n'envoie que 2..116 en CC 11 sur le programme OCT UP
     {
         proc.setParamValue ("program", 1.0f); proc.setParamValue ("smooth", 0.0f); proc.setParamValue ("active", 1.0f);

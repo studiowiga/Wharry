@@ -15,7 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = sys.argv[1]
 OUT = sys.argv[2]
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 TMP = os.path.dirname(OUT)
 
 for n, f in (("Pop", "Poppins-Regular"), ("PopL", "Poppins-Light"), ("PopM", "Poppins-Medium"), ("PopB", "Poppins-Bold")):
@@ -93,18 +93,18 @@ FACTORY = [  # nom, programme, moteur, glide, tone, mix
     ("Dive Bomb", "DIVE BOMB", "Classic", 15, 100, 100), ("Shallow Chorus (Detune)", "SHALLOW", "Classic", 60, 85, 90),
     ("Deep Detune Wash", "DEEP", "Chords", 60, 80, 100), ("Octave Spread (Oct Dn/Oct Up)", "OCT DN / OCT UP", "Chords", 35, 90, 85),
     ("Bass Fifth Bend (5th/7th)", "5TH / 7TH", "Classic", 30, 90, 90), ("Twin Lead Thirds (3rd/4th)", "3RD / 4TH", "Classic", 25, 100, 90),
-    ("Pedal Steel Bend (2nd/3rd)", "2ND / 3RD", "Classic", 50, 85, 90), ("Studio Octave Up (HQ, latency)", "OCT UP", "Chords Studio HQ", 25, 100, 100)]
+    ("Pedal Steel Bend (2nd/3rd)", "2ND / 3RD", "Classic", 50, 85, 90), ("Whammy Octave Down", "OCT DN", "Classic", 25, 100, 100)]
 FACT_DESC = {
     "en": ["The famous two-octave scream, fast and raw.", "The classic octave-up bend for leads and riffs.", "Rising fifth on power chords, clean in Chords mode.",
            "Instant half-step drop of the whole guitar, chord-friendly.", "Sub octave under chords: massive low end for the 7-string.",
            "Two octaves down, slow glide: doom / drone floor.", "Three-octave dive, short glide for a wild drop.", "Light chorus-like doubling, the pedal doses the detuned voice.",
            "Wide detune wash for clean arpeggios.", "Harmony sweeping from an octave below to an octave above.", "Fifth to seventh harmony bend, bluesy and dark.",
-           "Twin-guitar harmony moving from a third to a fourth.", "Pedal steel style bend from a second to a third.", "Highest quality octave up for re-amping / mixing (adds latency)."],
+           "Twin-guitar harmony moving from a third to a fourth.", "Pedal steel style bend from a second to a third.", "The classic one-octave dive, toe down = one octave below."],
     "fr": ["Le fameux cri à deux octaves, rapide et brut.", "Le classique glissement d'une octave vers le haut pour solos et riffs.", "Quinte montante sur power chords, propre en mode Chords.",
            "Descente instantanée d'un demi-ton de toute la guitare, adaptée aux accords.", "Octave grave sous les accords : bas énorme pour la 7 cordes.",
            "Deux octaves plus bas, glissement lent : son doom / drone.", "Plongée de trois octaves, glissement court pour une chute sauvage.", "Doublage léger façon chorus, la pédale dose la voix désaccordée.",
            "Large nappe désaccordée pour arpèges en son clair.", "Harmonie qui balaie d'une octave en dessous à une octave au-dessus.", "Harmonie quinte vers septième, bluesy et sombre.",
-           "Harmonie façon deux guitares, de la tierce à la quarte.", "Bend façon pedal steel, de la seconde à la tierce.", "Octave haute en qualité maximale pour ré-amping / mixage (ajoute de la latence)."]}
+           "Harmonie façon deux guitares, de la tierce à la quarte.", "Bend façon pedal steel, de la seconde à la tierce.", "La descente classique d'une octave : orteil enfoncé = une octave plus bas."]}
 
 # ---------- textes ----------
 T = {
@@ -167,7 +167,8 @@ T = {
        ["1.4.0", "Pedal fills the window (544 x 495), smaller jacks, IN / OUT engraved on the sides, more realistic treadle tilt synchronised with MIDI / automation, status line in the screen"],
        ["1.5.0", "Rounded pedal corners, IN / OUT moved away from the edges, treadle lighting (moving reflection, light and shadow following the tilt), presets selectable from the screen (preset list, previous / next program)"],
        ["1.5.1", "Anti-freeze: treadle positions precomputed in the background"],
-       ["1.6.0", "Expression pedal range learnt automatically (exact 0 / full interval with pedals that send e.g. 2-116), pedal calibration mode, end dead zones"]],
+       ["1.6.0", "Expression pedal range learnt automatically (exact 0 / full interval with pedals that send e.g. 2-116), pedal calibration mode, end dead zones"],
+       ["1.7.0", "CLASSIC / CHORDS lever slides in its slot with the original lighting, footswitch cap really goes down when pressed (MIDI too), contact shadows, LED halo removed when off, screws added (panel bottom right, under the treadle), bottom-right corner cleaned, factory preset Whammy Octave Down replaces Studio Octave Up"]],
  updown_cap="Treadle toe up (left) and toe down (right): the drawing follows the MIDI pedal and automation in real time.",
  ver_h=["Version", "Changes"], spec_h=["", ""]),
 "fr": dict(
@@ -229,7 +230,8 @@ T = {
        ["1.4.0", "Pédale agrandie dans la fenêtre (544 x 495), jacks plus petits, IN / OUT gravés sur les tranches, bascule du plateau plus réaliste et synchronisée avec le MIDI / les automations, ligne d'état dans l'écran"],
        ["1.5.0", "Coins de la pédale arrondis, IN / OUT éloignés des bords, éclairage du plateau (reflet mobile, lumière et ombres qui suivent l'inclinaison), presets à choisir depuis l'écran (liste des presets, programme précédent / suivant)"],
        ["1.5.1", "Anti-gel : positions du plateau précalculées en arrière-plan"],
-       ["1.6.0", "Course de la pédale d'expression apprise automatiquement (0 et intervalle complet exacts avec les pédales qui envoient par ex. 2-116), mode de calibration, zones mortes aux butées"]],
+       ["1.6.0", "Course de la pédale d'expression apprise automatiquement (0 et intervalle complet exacts avec les pédales qui envoient par ex. 2-116), mode de calibration, zones mortes aux butées"],
+       ["1.7.0", "Levier CLASSIC / CHORDS qui coulisse dans sa fente avec l'éclairage d'origine, chapeau du footswitch qui s'enfonce vraiment (aussi en MIDI), ombres de contact, halo de la LED éteinte supprimé, vis ajoutées (bas droit du panneau, sous le plateau), coin bas droit nettoyé, preset usine Whammy Octave Down à la place de Studio Octave Up"]],
  updown_cap="Plateau orteil levé (à gauche) et orteil enfoncé (à droite) : le dessin suit la pédale MIDI et les automations en temps réel.",
  ver_h=["Version", "Changements"], spec_h=["", ""]),
 }

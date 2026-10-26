@@ -21,7 +21,7 @@ const FactoryPreset& WharryProcessor::factory (int i)
         { "Bass Fifth Bend (5th/7th)",         14,  false, false,  30.0f, 0.90f, 0.90f },
         { "Twin Lead Thirds (3rd/4th)",        17,  false, false,  25.0f, 1.00f, 0.90f },
         { "Pedal Steel Bend (2nd/3rd)",        19,  false, false,  50.0f, 0.85f, 0.90f },
-        { "Studio Octave Up (HQ, latency)",     1,  true,  true,   25.0f, 1.00f, 1.00f },
+        { "Whammy Octave Down",                 7,  false, false,  25.0f, 1.00f, 1.00f },
     };
     return f[jlimit (0, kNumFactory - 1, i)];
 }

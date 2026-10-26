@@ -6,7 +6,7 @@ add_subdirectory(${JUCE_DIR} JUCE)
 set(W ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 juce_add_binary_data(WharryAssets SOURCES
   ${W}/background.png ${W}/treadle_down.png
-  ${W}/fs_on.png ${W}/fs_off.png ${W}/toggle_l.png ${W}/toggle_r.png
+  ${W}/fs_cap.png ${W}/toggle_lever.png
   ${W}/fonts/Poppins-Medium.ttf ${W}/fonts/Poppins-Bold.ttf)
 juce_add_console_app(WharryRender PRODUCT_NAME "WharryRender")
 target_sources(WharryRender PRIVATE main.cpp ${W}/PluginProcessor.cpp ${W}/PluginEditor.cpp)
