@@ -323,7 +323,7 @@ namespace
     void addSizeItems (PopupMenu& m, const WharryEditor* ed)
     {
         const int cur = ed != nullptr ? ed->getScaleIndex() : -1;
-        m.addItem (904, "Default (same height as Ring Think)", true, isDefaultSize (ed));
+        m.addItem (904, "60 % (default)", true, isDefaultSize (ed));
         m.addItem (902, "75 %", true, cur == 1);
         m.addItem (903, "100 %", true, cur == 2);
     }

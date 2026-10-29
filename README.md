@@ -23,3 +23,5 @@ Le plugin calcule la bascule du plateau en perspective (orteil levé -> enfoncé
 ## Build
 GitHub Actions (`.github/workflows/build.yml`) : artefacts `Wharry-VST3-Windows` et `Wharry-VST3-macOS`.
 Tests du moteur audio : `g++ -O2 -std=c++17 tests/test_dsp.cpp -o test_dsp && ./test_dsp`
+
+- v1.8.2 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
