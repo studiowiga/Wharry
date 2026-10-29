@@ -48,7 +48,7 @@ AudioProcessorValueTreeState::ParameterLayout WharryProcessor::createLayout()
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "mix", 1 },  "Mix",  NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
-    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", false));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "pc", 1 }, "Respond to MIDI Program Change (Whammy 5 map)", true));
     return { p.begin(), p.end() };
 }

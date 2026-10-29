@@ -12,6 +12,7 @@ au format **pédale double** (fenêtre aux hauteurs de Ring Think : 544 x 495 pa
 - Sélecteur 21 crans sans LED : l'écran affiche famille, numéro, programmes voisins, programme choisi, décalage en direct et course de la pédale ; clic sur l'écran = menu des presets
 - Suivi des notes jusqu'à ~35 Hz (7 cordes en G et plus bas)
 
+v1.8.1 : pédale d'expression MIDI inversée par défaut (option « Invert pedal direction » cochée à l'ouverture)
 v1.8.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)
 
 ## Visuel
