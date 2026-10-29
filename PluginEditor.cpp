@@ -637,7 +637,7 @@ private:
         // ligne d'état (valeurs des réglages en direct, ou consigne de MIDI learn)
         auto stRow = area.removeFromBottom (fh * 0.075f);
         g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.056f)));
-        g.setColour (kCyan.withAlpha (proc.getLearnTarget() != MidiTarget::None ? 1.0f : 0.7f * alpha));
+        g.setColour (kCyan.withAlpha (proc.learnTarget.load() >= 0 || Time::getMillisecondCounterHiRes() < learnMsgUntil ? 1.0f : 0.7f * alpha));
         g.drawFittedText (drawnStatus, stRow.toNearestInt(), Justification::centred, 1, 0.5f);
         area.removeFromBottom (fh * 0.02f);
 
@@ -659,13 +659,12 @@ private:
 
     String statusText() const
     {
-        const auto learn = proc.getLearnTarget();
+        const int learn = proc.learnTarget.load();
         if (proc.isCalibrating())
             return proc.calibrationSpan() > 0.3f ? "CALIBRATION : OK - click the screen to finish"
                                                  : "CALIBRATION : press the pedal fully down, then fully up";
-        if (learn == MidiTarget::Pedal)   return "MIDI LEARN : move your expression pedal";
-        if (learn == MidiTarget::LeftFsw) return "MIDI LEARN : CLASSIC / CHORDS switch";
-        if (learn == MidiTarget::RightFsw)return "MIDI LEARN : ON / OFF footswitch";
+        if (learn >= 0) return String ("MIDI LEARN: move a control for ") + WharryProcessor::learnDef (learn).name;
+        if (Time::getMillisecondCounterHiRes() < learnMsgUntil) return learnMsg;      // "<Commande> = CC n" pendant 2 s
         auto pc = [this] (const char* id) { return String (roundToInt (proc.apvts.getParameter (id)->getValue() * 100.0f)) + " %"; };
         String st = "PEDAL " + String (roundToInt (proc.getPedalShown() * 100.0f)) + " %"
                   + "  ·  GLIDE " + String (roundToInt (proc.apvts.getRawParameterValue ("smooth")->load())) + " ms"
@@ -709,6 +708,14 @@ private:
             bool built = false;
             while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing (cur)) built = true;
             if (built) askRepaint (r (treadle.designBounds().toFloat()).toNearestInt().expanded (2));
+        }
+
+        // MIDI Learn : confirmation 2 s dans la ligne d'état de l'écran
+        const int learned = proc.lastLearned.exchange (-1);
+        if (learned >= 0)
+        {
+            learnMsg = String (WharryProcessor::learnDef (learned).name) + " = " + proc.learnAssignText (learned);
+            learnMsgUntil = Time::getMillisecondCounterHiRes() + 2000.0;
         }
 
         const int prog = currentProgram();
@@ -784,22 +791,64 @@ private:
         });
     }
 
+    // commande sous la souris (même ordre de test que mouseDown) : index MIDI Learn, -1 = hors commande
+    int learnIndexAt (Point<float> p) const
+    {
+        if (kScreen.contains (p)) return -1;
+        if (p.getDistanceFrom (kKnob) < kKnobR) return WharryProcessor::lProgram;
+        for (int i = 0; i < 3; ++i)
+            if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f) return WharryProcessor::lGlide + i;
+        if (kToggleHit.contains (p)) return WharryProcessor::lChords;
+        if (kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.6f) return WharryProcessor::lFs;
+        if (kPlate.contains (p)) return WharryProcessor::lPedal;
+        return -1;
+    }
+
+    // clic droit sur une commande : MIDI Learn de cette commande en tête du menu
+    void addLearnSection (PopupMenu& m, int i)
+    {
+        const String name = WharryProcessor::learnDef (i).name;
+        const int lt = proc.learnTarget.load();
+        m.addSectionHeader (name);
+        m.addItem (1000 + i, "MIDI Learn: " + name + " (" + proc.learnAssignText (i) + ")", true, lt == i);
+        m.addItem (1100 + i, "Clear MIDI: " + name, proc.learnAssignText (i) != "none");
+        if (lt >= 0) m.addItem (1200, "Cancel MIDI learn");
+        m.addSeparator();
+    }
+
+    void addMidiSubmenu (PopupMenu& m)
+    {
+        PopupMenu midi;
+        for (int i = 0; i < WharryProcessor::numLearn; ++i)
+            midi.addItem (1000 + i, String ("Learn: ") + WharryProcessor::learnDef (i).name + " (" + proc.learnAssignText (i) + ")",
+                          true, proc.learnTarget.load() == i);
+        midi.addSeparator();
+        if (proc.learnTarget.load() >= 0) midi.addItem (1200, "Cancel MIDI learn");
+        midi.addItem (1201, "Reset MIDI to defaults (pedal CC 11, others none)");
+        midi.addSeparator();
+        midi.addItem (1202, "CLASSIC / CHORDS and footswitch also learn a MIDI note", false);
+        m.addSubMenu ("MIDI", midi);
+        m.addSeparator();
+    }
+
+    void handleLearnChoice (int r)
+    {
+        if (r >= 1000 && r < 1000 + WharryProcessor::numLearn)          // re-cliquer sur la commande en attente annule
+            proc.learnTarget.store (proc.learnTarget.load() == r - 1000 ? -1 : r - 1000);
+        else if (r >= 1100 && r < 1100 + WharryProcessor::numLearn) proc.clearLearn (r - 1100);
+        else if (r == 1200) proc.learnTarget.store (-1);
+        else if (r == 1201) proc.resetMidiMap();
+    }
+
     void showMenu (Point<float> p)
     {
         auto* ed = findParentComponentOfClass<WharryEditor>();
         PopupMenu m;
-        const bool onFs = kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.6f;
-        const bool onToggle = kToggleHit.contains (p);
-        if (onFs || onToggle)
-        {
-            const auto t = onToggle ? MidiTarget::LeftFsw : MidiTarget::RightFsw;
-            const auto d = proc.getMidiDescription (t);
-            m.addSectionHeader (onToggle ? "CLASSIC / CHORDS switch" : "ON / OFF footswitch");
-            m.addItem (onToggle ? 11 : 21, "MIDI learn" + (d.isNotEmpty() ? " (now: " + d + ")" : String()));
-            m.addItem (onToggle ? 12 : 22, "Clear MIDI assignment", d.isNotEmpty());
-            m.addSeparator();
-        }
-        else
+        const int learnIdx = learnIndexAt (p);
+        if (learnIdx >= 0) addLearnSection (m, learnIdx);
+        const bool onFs = learnIdx == WharryProcessor::lFs;
+        const bool onToggle = learnIdx == WharryProcessor::lChords;
+        if (! (onFs || onToggle))
         {
             m.addSectionHeader ("Expression pedal (" + proc.getMidiDescription (MidiTarget::Pedal) + ")");
             m.addItem (31, "MIDI learn pedal controller");
@@ -813,6 +862,7 @@ private:
             m.addItem (52, "Studio HQ (latency, for re-amping / mixing)", true, param ("studio"));
             m.addItem (53, "Respond to MIDI Program Change", true, param ("pc"));
             m.addSeparator();
+            if (learnIdx < 0) addMidiSubmenu (m);
         }
         m.addSectionHeader ("Plugin size");
         addSizeItems (m, ed);
@@ -822,12 +872,9 @@ private:
         {
             if (sp == nullptr || res == 0) return;
             auto& pr = sp->proc;
+            if (res >= 1000) { sp->handleLearnChoice (res); return; }
             switch (res)
             {
-                case 11: pr.startMidiLearn (MidiTarget::LeftFsw); break;
-                case 12: pr.clearMidi (MidiTarget::LeftFsw); break;
-                case 21: pr.startMidiLearn (MidiTarget::RightFsw); break;
-                case 22: pr.clearMidi (MidiTarget::RightFsw); break;
                 case 31: pr.startMidiLearn (MidiTarget::Pedal); break;
                 case 32: pr.clearMidi (MidiTarget::Pedal); break;
                 case 33: pr.togglePedalSwitch ("invert"); break;
@@ -866,6 +913,8 @@ private:
     int drawnProgram = -1, drawnFactory = -2;
     bool drawnChords = false, drawnActive = true;
     String drawnStatus;
+    String learnMsg;                       // "Tone = CC 21" pendant 2 s après un MIDI Learn
+    double learnMsgUntil = 0.0;
 };
 
 //==============================================================================

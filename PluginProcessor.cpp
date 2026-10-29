@@ -26,6 +26,48 @@ const FactoryPreset& WharryProcessor::factory (int i)
     return f[jlimit (0, kNumFactory - 1, i)];
 }
 
+// ------------------------------------------------------------------ MIDI Learn
+const WharryProcessor::LearnDef& WharryProcessor::learnDef (int i)
+{
+    // pedale d'expression : CC 11 par defaut (standard Whammy, comme avant) ; les autres commandes ne sont pas assignees
+    static const LearnDef defs[numLearn] =
+    {
+        { "pedal",  "Expression pedal",        11, learnContinuous, 0 },
+        { "program","Program selector",        -1, learnSelector,   wharry::kNumPrograms },
+        { "smooth", "Glide",                   -1, learnContinuous, 0 },
+        { "tone",   "Tone",                    -1, learnContinuous, 0 },
+        { "mix",    "Mix",                     -1, learnContinuous, 0 },
+        { "chords", "CLASSIC / CHORDS switch", -1, learnFootswitch, 0 },   // bascule a chaque appui, comme avant
+        { "active", "ON / OFF footswitch",     -1, learnFootswitch, 0 },
+    };
+    return defs[jlimit (0, numLearn - 1, i)];
+}
+
+void WharryProcessor::resetMidiMap()
+{
+    learnTarget = -1;
+    for (int i = 0; i < numLearn; ++i) ccMap[i].store (learnDef (i).defaultCC);
+    noteLeft = -1; noteRight = -1;
+}
+
+void WharryProcessor::clearLearn (int i)
+{
+    if (i < 0 || i >= numLearn) return;
+    ccMap[i].store (-1);
+    if (i == lChords) noteLeft = -1;
+    if (i == lFs)     noteRight = -1;
+    if (learnTarget.load() == i) learnTarget = -1;
+}
+
+String WharryProcessor::learnAssignText (int i) const
+{
+    const int cc = ccMap[jlimit (0, numLearn - 1, i)].load();
+    if (cc >= 0) return "CC " + String (cc);
+    const int note = i == lChords ? noteLeft.load() : (i == lFs ? noteRight.load() : -1);
+    if (note >= 0) return "Note " + String (note);
+    return "none";
+}
+
 // ------------------------------------------------------------------ paramètres
 AudioProcessorValueTreeState::ParameterLayout WharryProcessor::createLayout()
 {
@@ -72,7 +114,13 @@ WharryProcessor::WharryProcessor()
     pPC      = apvts.getRawParameterValue ("pc");
     apvts.addParameterListener ("pedal", this);
     pedalLive = pPedal->load();
-    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    for (int i = 0; i < numQueued; ++i)
+    {
+        pendingValue[i] = 0.0f; pendingSet[i] = false;
+        queuedPtr[i] = apvts.getRawParameterValue (queuedId (i));
+        queuedParam[i] = apvts.getParameter (queuedId (i));
+    }
+    resetMidiMap();
     startTimerHz (60);   // anti-gel v2 : aucun appel à l'hôte depuis le thread audio
 }
 
@@ -97,9 +145,10 @@ wharry::Settings WharryProcessor::currentSettings() const
     s.studio   = pStudio->load (std::memory_order_relaxed) > 0.5f;
     s.active   = pActive->load (std::memory_order_relaxed) > 0.5f;
     s.pedal    = jlimit (0.0f, 1.0f, pedalLive.load());
-    s.smoothMs = pSmooth->load (std::memory_order_relaxed);
-    s.tone     = pTone->load (std::memory_order_relaxed);
-    s.mix      = pMix->load (std::memory_order_relaxed);
+    // valeur MIDI encore en file (pas encore transmise par le timer) prise tout de suite ; le moteur lisse ensuite
+    s.smoothMs = queuedOrCurrent (3);
+    s.tone     = queuedOrCurrent (4);
+    s.mix      = queuedOrCurrent (5);
     return s;
 }
 
@@ -187,27 +236,51 @@ String WharryProcessor::calibrationDescription() const
 // ------------------------------------------------------------------ MIDI
 void WharryProcessor::handleMidiMessage (const MidiMessage& m)
 {
-    const auto learn = (MidiTarget) learnTarget.load();
-    if (learn != MidiTarget::None && ((m.isController() && m.getControllerNumber() < 120) || m.isNoteOn()))
+    // MIDI Learn : le premier CC recu (ou une note pour CLASSIC / CHORDS et le footswitch) est affecte a la commande visee
+    const int lt = learnTarget.load();
+    if (lt >= 0 && lt < numLearn)
     {
-        const int cc = m.isController() ? m.getControllerNumber() : -1;
-        const int note = m.isNoteOn() ? m.getNoteNumber() : -1;
-        if (learn == MidiTarget::Pedal)        { if (cc >= 0) ccPedal = cc; }
-        else if (learn == MidiTarget::LeftFsw) { ccLeft = cc; noteLeft = note; }
-        else                                   { ccRight = cc; noteRight = note; }
-        if (learn != MidiTarget::Pedal || cc >= 0) learnTarget = 0;
-        return;
+        if (m.isController() && m.getControllerNumber() < 120)
+        {
+            const int cc = m.getControllerNumber();
+            const bool on = m.getControllerValue() >= 64;
+            for (int j = 0; j < numLearn; ++j)
+                if (j != lt && ccMap[j].load() == cc) ccMap[j].store (-1);   // numero deja pris : l'autre commande est desassignee
+            ccMap[lt].store (cc);
+            if (lt == lChords) { noteLeft = -1;  leftHeld = on; }
+            if (lt == lFs)     { noteRight = -1; rightHeld = on; }
+            lastLearned = lt; learnTarget = -1;
+            return;
+        }
+        if (m.isNoteOn() && (lt == lChords || lt == lFs))
+        {
+            const int note = m.getNoteNumber();
+            if (lt == lChords) { noteLeft = note;  if (noteRight.load() == note) noteRight = -1; }
+            else               { noteRight = note; if (noteLeft.load() == note)  noteLeft = -1; }
+            ccMap[lt].store (-1);
+            lastLearned = lt; learnTarget = -1;
+            return;
+        }
     }
 
     if (m.isController())
     {
         const int c = m.getControllerNumber(), v = m.getControllerValue();
-        if (c == ccPedal.load()) { const float raw = (float) v / 127.0f; notePedalRaw (raw, true); pedalLive = mapPedal (raw, true); }
+        if (c == ccMap[lPedal].load (std::memory_order_relaxed)) { const float raw = (float) v / 127.0f; notePedalRaw (raw, true); pedalLive = mapPedal (raw, true); }
+        // sélecteur (21 programmes) et potards GLIDE / TONE / MIX appris : 0-127 réparti sur la course
+        if (c == ccMap[lProgram].load (std::memory_order_relaxed))
+        {
+            activeFactory = -1;
+            setParamFromAudio (0, (float) jmin (wharry::kNumPrograms - 1, v * wharry::kNumPrograms / 128));
+        }
+        for (int k = 0; k < 3; ++k)
+            if (c == ccMap[lGlide + k].load (std::memory_order_relaxed))
+                setParamFromAudio (3 + k, queuedParam[3 + k]->convertFrom0to1 ((float) v / 127.0f));
         const bool on = v >= 64;
         // anti-gel v2 : bascule mise en file (valeur en file si elle existe, sinon valeur courante)
         auto toggle = [this] (int qi) { setParamFromAudio (qi, queuedOrCurrent (qi) > 0.5f ? 0.0f : 1.0f); };
-        if (c == ccLeft.load())  { if (on && ! leftHeld.load())  toggle (1); leftHeld = on; }
-        if (c == ccRight.load()) { if (on && ! rightHeld.load()) toggle (2); rightHeld = on; }
+        if (c == ccMap[lChords].load (std::memory_order_relaxed)) { if (on && ! leftHeld.load())  toggle (1); leftHeld = on; }
+        if (c == ccMap[lFs].load (std::memory_order_relaxed))     { if (on && ! rightHeld.load()) toggle (2); rightHeld = on; }
     }
     else if (m.isNoteOn())
     {
@@ -232,20 +305,14 @@ void WharryProcessor::handleMidiMessage (const MidiMessage& m)
 
 void WharryProcessor::clearMidi (MidiTarget t)
 {
-    if (t == MidiTarget::Pedal)        ccPedal = 11;
-    else if (t == MidiTarget::LeftFsw) { ccLeft = -1; noteLeft = -1; }
-    else                               { ccRight = -1; noteRight = -1; }
-    if (getLearnTarget() == t) learnTarget = 0;
+    if (t == MidiTarget::Pedal) { ccMap[lPedal] = 11; if (learnTarget.load() == lPedal) learnTarget = -1; }   // « Reset to CC 11 »
+    else clearLearn (learnIndexOf (t));
 }
 
 String WharryProcessor::getMidiDescription (MidiTarget t) const
 {
-    if (t == MidiTarget::Pedal) return "CC " + String (ccPedal.load());
-    const int cc = t == MidiTarget::LeftFsw ? ccLeft.load() : ccRight.load();
-    const int note = t == MidiTarget::LeftFsw ? noteLeft.load() : noteRight.load();
-    if (cc >= 0) return "CC " + String (cc);
-    if (note >= 0) return "Note " + String (note);
-    return {};
+    const auto d = learnAssignText (learnIndexOf (t));
+    return d == "none" ? String() : d;
 }
 
 // ------------------------------------------------------------------ audio
@@ -292,7 +359,7 @@ void WharryProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi
 // (60 Hz, thread de messages) la transmet au DAW et à la fenêtre.
 const char* WharryProcessor::queuedId (int i)
 {
-    static const char* ids[numQueued] = { "program", "chords", "active" };
+    static const char* ids[numQueued] = { "program", "chords", "active", "smooth", "tone", "mix" };
     return ids[jlimit (0, numQueued - 1, i)];
 }
 
@@ -305,8 +372,7 @@ void WharryProcessor::setParamFromAudio (int i, float plain)
 float WharryProcessor::queuedOrCurrent (int i) const
 {
     if (pendingSet[i].load (std::memory_order_acquire)) return pendingValue[i].load (std::memory_order_relaxed);
-    const std::atomic<float>* src[numQueued] = { pProgram, pChords, pActive };
-    return src[jlimit (0, numQueued - 1, i)]->load (std::memory_order_relaxed);
+    return queuedPtr[jlimit (0, numQueued - 1, i)]->load (std::memory_order_relaxed);
 }
 
 void WharryProcessor::timerCallback()
@@ -368,10 +434,12 @@ AudioProcessorEditor* WharryProcessor::createEditor() { return new WharryEditor 
 void WharryProcessor::getStateInformation (MemoryBlock& dest)
 {
     auto st = apvts.copyState();
-    st.setProperty ("ccPedal", ccPedal.load(), nullptr);
-    st.setProperty ("ccLeft", ccLeft.load(), nullptr);
+    st.setProperty ("ccPedal", ccMap[lPedal].load(), nullptr);      // anciennes cles (projets < 1.9)
+    st.setProperty ("ccLeft", ccMap[lChords].load(), nullptr);
     st.setProperty ("noteLeft", noteLeft.load(), nullptr);
-    st.setProperty ("ccRight", ccRight.load(), nullptr);
+    st.setProperty ("ccRight", ccMap[lFs].load(), nullptr);
+    for (int i = 0; i < numLearn; ++i)
+        st.setProperty (String ("cc_") + learnDef (i).id, ccMap[i].load(), nullptr);
     st.setProperty ("noteRight", noteRight.load(), nullptr);
     st.setProperty ("uiScaleIdx", uiScaleIdx.load(), nullptr);
     st.setProperty ("factory", currentFactory, nullptr);
@@ -387,10 +455,17 @@ void WharryProcessor::setStateInformation (const void* data, int size)
         {
             const auto st = ValueTree::fromXml (*xml);
             apvts.replaceState (st);
-            ccPedal   = (int) st.getProperty ("ccPedal", 11);
-            ccLeft    = (int) st.getProperty ("ccLeft", -1);
+            // assignations MIDI Learn (-1 = non assigne) ; projet < 1.9 : ccPedal / ccLeft / ccRight
+            learnTarget = -1;
+            for (int i = 0; i < numLearn; ++i)
+            {
+                const var legacy = i == lPedal  ? st.getProperty ("ccPedal", 11)
+                                 : i == lChords ? st.getProperty ("ccLeft", -1)
+                                 : i == lFs     ? st.getProperty ("ccRight", -1)
+                                                : var (learnDef (i).defaultCC);
+                ccMap[i].store (jlimit (-1, 127, (int) st.getProperty (String ("cc_") + learnDef (i).id, legacy)));
+            }
             noteLeft  = (int) st.getProperty ("noteLeft", -1);
-            ccRight   = (int) st.getProperty ("ccRight", -1);
             noteRight = (int) st.getProperty ("noteRight", -1);
             uiScaleIdx = jlimit (-1, 2, (int) st.getProperty ("uiScaleIdx", -1));
             currentFactory = jlimit (0, kNumFactory - 1, (int) st.getProperty ("factory", 0));

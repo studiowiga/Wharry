@@ -65,11 +65,29 @@ public:
     float getDetectedHz() const   { return detHz.load(); }
     int   getLatency() const      { return reportedLatency.load(); }
 
-    void startMidiLearn (MidiTarget t) { learnTarget = (int) t; }
-    void cancelMidiLearn() { learnTarget = 0; }
-    MidiTarget getLearnTarget() const { return (MidiTarget) learnTarget.load(); }
+    void startMidiLearn (MidiTarget t) { learnTarget = learnIndexOf (t); }
+    void cancelMidiLearn() { learnTarget = -1; }
+    MidiTarget getLearnTarget() const
+    {
+        const int lt = learnTarget.load();
+        return lt == lPedal ? MidiTarget::Pedal : lt == lChords ? MidiTarget::LeftFsw : lt == lFs ? MidiTarget::RightFsw : MidiTarget::None;
+    }
     void clearMidi (MidiTarget t);
     juce::String getMidiDescription (MidiTarget t) const;
+
+    // v1.9 MIDI Learn : toutes les commandes de la facade (clic droit sur la commande)
+    enum LearnType { learnContinuous, learnToggle, learnSelector, learnFootswitch };
+    struct LearnDef { const char* id; const char* name; int defaultCC; int type; int positions; };
+    enum { lPedal = 0, lProgram = 1, lGlide = 2, lTone = 3, lMix = 4, lChords = 5, lFs = 6 };
+    static constexpr int numLearn = 7;
+    static const LearnDef& learnDef (int i);
+    static int learnIndexOf (MidiTarget t) { return t == MidiTarget::Pedal ? lPedal : t == MidiTarget::LeftFsw ? lChords : t == MidiTarget::RightFsw ? lFs : -1; }
+    std::atomic<int> ccMap[numLearn];            // numero de CC de chaque commande, -1 = non assigne
+    std::atomic<int> learnTarget { -1 };         // commande en attente d'un CC (-1 = pas de learn)
+    std::atomic<int> lastLearned { -1 };         // derniere commande apprise (lue et remise a -1 par la fenetre)
+    void resetMidiMap();
+    void clearLearn (int i);
+    juce::String learnAssignText (int i) const;  // "CC n", "Note n" ou "none"
 
     // calibration de la pédale d'expression (pédales qui n'atteignent pas 0 / 127)
     void startCalibration();
@@ -102,7 +120,7 @@ private:
     std::atomic<float> pedalLive { 0.0f }, pedalShown { 0.0f }, semis { 0.0f }, detHz { 0.0f };
     std::atomic<int> reportedLatency { 0 }, latencyToSet { -1 };
     std::atomic<juce::uint32> lastBlockMs { 0 };
-    std::atomic<int> learnTarget { 0 }, ccPedal { 11 }, ccLeft { -1 }, noteLeft { -1 }, ccRight { -1 }, noteRight { -1 };
+    std::atomic<int> noteLeft { -1 }, noteRight { -1 };      // CLASSIC / CHORDS et footswitch : CC dans ccMap, ou note MIDI
     std::atomic<bool> leftHeld { false }, rightHeld { false };
     std::atomic<float> autoMin { 1.0f }, autoMax { 0.0f };          // plage réellement envoyée par la pédale MIDI (apprise automatiquement)
     std::atomic<bool> calibrating { false };
@@ -111,8 +129,10 @@ private:
 
     // changements demandés depuis le thread audio (MIDI) et appliqués sur le thread de la fenêtre
     // anti-gel v2 : file de valeurs (aucun appel à l'hôte depuis l'audio), vidée par le timer du processeur
-    static constexpr int numQueued = 3;
-    static const char* queuedId (int i);              // "program", "chords", "active"
+    static constexpr int numQueued = 6;
+    static const char* queuedId (int i);              // "program", "chords", "active", "smooth", "tone", "mix"
+    std::atomic<float>* queuedPtr[numQueued] {};
+    juce::RangedAudioParameter* queuedParam[numQueued] {};
     void setParamFromAudio (int i, float plain);
     float queuedOrCurrent (int i) const;
     std::atomic<float> pendingValue[numQueued];
