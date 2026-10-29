@@ -72,12 +72,14 @@ WharryProcessor::WharryProcessor()
     pPC      = apvts.getRawParameterValue ("pc");
     apvts.addParameterListener ("pedal", this);
     pedalLive = pPedal->load();
+    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    startTimerHz (60);   // anti-gel v2 : aucun appel à l'hôte depuis le thread audio
 }
 
 WharryProcessor::~WharryProcessor()
 {
+    stopTimer();
     apvts.removeParameterListener ("pedal", this);
-    cancelPendingUpdate();
 }
 
 bool WharryProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -90,14 +92,14 @@ bool WharryProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 wharry::Settings WharryProcessor::currentSettings() const
 {
     wharry::Settings s;
-    s.programIdx = jlimit (0, wharry::kNumPrograms - 1, (int) std::lround (pProgram->load()));
-    s.chords   = pChords->load() > 0.5f;
-    s.studio   = pStudio->load() > 0.5f;
-    s.active   = pActive->load() > 0.5f;
+    s.programIdx = jlimit (0, wharry::kNumPrograms - 1, (int) std::lround (pProgram->load (std::memory_order_relaxed)));
+    s.chords   = pChords->load (std::memory_order_relaxed) > 0.5f;
+    s.studio   = pStudio->load (std::memory_order_relaxed) > 0.5f;
+    s.active   = pActive->load (std::memory_order_relaxed) > 0.5f;
     s.pedal    = jlimit (0.0f, 1.0f, pedalLive.load());
-    s.smoothMs = pSmooth->load();
-    s.tone     = pTone->load();
-    s.mix      = pMix->load();
+    s.smoothMs = pSmooth->load (std::memory_order_relaxed);
+    s.tone     = pTone->load (std::memory_order_relaxed);
+    s.mix      = pMix->load (std::memory_order_relaxed);
     return s;
 }
 
@@ -124,13 +126,13 @@ void WharryProcessor::parameterChanged (const String& id, float v)
 //  3. inversion éventuelle (MIDI seulement).
 float WharryProcessor::mapPedal (float raw, bool fromMidi) const
 {
-    float lo = pHeel->load(), hi = pToe->load();
+    float lo = pHeel->load (std::memory_order_relaxed), hi = pToe->load (std::memory_order_relaxed);
     const bool manual = lo > 0.001f || hi < 0.999f;
     if (! manual && fromMidi && autoMax.load() - autoMin.load() > 0.4f) { lo = autoMin.load(); hi = autoMax.load(); }
     float v = hi > lo + 0.01f ? (raw - lo) / (hi - lo) : raw;
     constexpr float dz = 0.02f;
     v = jlimit (0.0f, 1.0f, (v - dz) / (1.0f - 2.0f * dz));
-    return (fromMidi && pInvert->load() > 0.5f) ? 1.0f - v : v;
+    return (fromMidi && pInvert->load (std::memory_order_relaxed) > 0.5f) ? 1.0f - v : v;
 }
 
 void WharryProcessor::notePedalRaw (float raw, bool fromMidi)
@@ -175,7 +177,7 @@ void WharryProcessor::resetCalibration()
 
 String WharryProcessor::calibrationDescription() const
 {
-    const float lo = pHeel->load(), hi = pToe->load();
+    const float lo = pHeel->load (std::memory_order_relaxed), hi = pToe->load (std::memory_order_relaxed);
     auto cc = [] (float v) { return String (roundToInt (v * 127.0f)); };
     if (lo > 0.001f || hi < 0.999f) return "calibrated " + cc (lo) + " - " + cc (hi);
     if (autoMax.load() - autoMin.load() > 0.4f) return "auto " + cc (autoMin.load()) + " - " + cc (autoMax.load());
@@ -202,15 +204,18 @@ void WharryProcessor::handleMidiMessage (const MidiMessage& m)
         const int c = m.getControllerNumber(), v = m.getControllerValue();
         if (c == ccPedal.load()) { const float raw = (float) v / 127.0f; notePedalRaw (raw, true); pedalLive = mapPedal (raw, true); }
         const bool on = v >= 64;
-        if (c == ccLeft.load())  { if (on && ! leftHeld.load())  { pendingToggleLeft = true;  triggerAsyncUpdate(); } leftHeld = on; }
-        if (c == ccRight.load()) { if (on && ! rightHeld.load()) { pendingToggleRight = true; triggerAsyncUpdate(); } rightHeld = on; }
+        // anti-gel v2 : bascule mise en file (valeur en file si elle existe, sinon valeur courante)
+        auto toggle = [this] (int qi) { setParamFromAudio (qi, queuedOrCurrent (qi) > 0.5f ? 0.0f : 1.0f); };
+        if (c == ccLeft.load())  { if (on && ! leftHeld.load())  toggle (1); leftHeld = on; }
+        if (c == ccRight.load()) { if (on && ! rightHeld.load()) toggle (2); rightHeld = on; }
     }
     else if (m.isNoteOn())
     {
-        if (m.getNoteNumber() == noteLeft.load())  { pendingToggleLeft = true;  triggerAsyncUpdate(); }
-        if (m.getNoteNumber() == noteRight.load()) { pendingToggleRight = true; triggerAsyncUpdate(); }
+        auto toggle = [this] (int qi) { setParamFromAudio (qi, queuedOrCurrent (qi) > 0.5f ? 0.0f : 1.0f); };
+        if (m.getNoteNumber() == noteLeft.load())  toggle (1);
+        if (m.getNoteNumber() == noteRight.load()) toggle (2);
     }
-    else if (m.isProgramChange() && pPC->load() > 0.5f)
+    else if (m.isProgramChange() && pPC->load (std::memory_order_relaxed) > 0.5f)
     {
         // même logique que la Whammy 5 : 21 programmes actifs, 21 en bypass, en CLASSIC puis en CHORDS
         // (PC 1-21 Classic on, 22-42 Classic bypass, 43-63 Chords on, 64-84 Chords bypass ; numérotation 1-84)
@@ -218,10 +223,9 @@ void WharryProcessor::handleMidiMessage (const MidiMessage& m)
         if (pc < 84)
         {
             const int group = pc / 21;
-            pendingProgram = pc % 21;
-            pendingChords  = group >= 2 ? 1 : 0;
-            pendingActive  = (group % 2 == 0) ? 1 : 0;
-            triggerAsyncUpdate();
+            setParamFromAudio (0, (float) (pc % 21));
+            setParamFromAudio (1, group >= 2 ? 1.0f : 0.0f);
+            setParamFromAudio (2, (group % 2 == 0) ? 1.0f : 0.0f);
         }
     }
 }
@@ -280,22 +284,39 @@ void WharryProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi
     detHz = engine.detectedHz();
 
     const int lat = engine.currentLatency();
-    if (lat != reportedLatency.load()) { reportedLatency = lat; latencyToSet = lat; triggerAsyncUpdate(); }
+    if (lat != reportedLatency.load()) { reportedLatency = lat; latencyToSet = lat; }   // transmise à l'hôte par le timer
 }
 
-void WharryProcessor::handleAsyncUpdate()
+// Anti-gel v2 (Studio Wiga) : jamais d'appel à l'hôte (setValueNotifyingHost, setLatencySamples) ni d'allocation
+// depuis le thread audio. Le MIDI met la valeur en file (pendingValue / pendingSet) ; le timer du processeur
+// (60 Hz, thread de messages) la transmet au DAW et à la fenêtre.
+const char* WharryProcessor::queuedId (int i)
+{
+    static const char* ids[numQueued] = { "program", "chords", "active" };
+    return ids[jlimit (0, numQueued - 1, i)];
+}
+
+void WharryProcessor::setParamFromAudio (int i, float plain)
+{
+    pendingValue[i].store (plain, std::memory_order_relaxed);
+    pendingSet[i].store (true, std::memory_order_release);
+}
+
+float WharryProcessor::queuedOrCurrent (int i) const
+{
+    if (pendingSet[i].load (std::memory_order_acquire)) return pendingValue[i].load (std::memory_order_relaxed);
+    const std::atomic<float>* src[numQueued] = { pProgram, pChords, pActive };
+    return src[jlimit (0, numQueued - 1, i)]->load (std::memory_order_relaxed);
+}
+
+void WharryProcessor::timerCallback()
 {
     const int lat = latencyToSet.exchange (-1);
     if (lat >= 0) setLatencySamples (lat);
 
-    const int prog = pendingProgram.exchange (-1);
-    if (prog >= 0) setParamValue ("program", (float) prog);
-    const int ch = pendingChords.exchange (-1);
-    if (ch >= 0) setParamValue ("chords", (float) ch);
-    const int ac = pendingActive.exchange (-1);
-    if (ac >= 0) setParamValue ("active", (float) ac);
-    if (pendingToggleLeft.exchange (false))  togglePedalSwitch ("chords");
-    if (pendingToggleRight.exchange (false)) togglePedalSwitch ("active");
+    for (int i = 0; i < numQueued; ++i)
+        if (pendingSet[i].exchange (false, std::memory_order_acquire))
+            setParamValue (queuedId (i), pendingValue[i].load (std::memory_order_relaxed));
 }
 
 // ------------------------------------------------------------------ commandes de la fenêtre

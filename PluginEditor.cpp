@@ -34,20 +34,19 @@ namespace
 
     Image loadPng (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n).convertedToFormat (Image::ARGB); }
 
-    // redimensionne une fois, puis garde en cache tant que la taille ne change pas
+    // redimensionne une fois (par le timer, jamais dans paint), puis garde en cache tant que la taille ne change pas
     struct ScaledCache
     {
         Image src, img; float scale = -1.0f;
-        const Image& get (float s)
+        void prepare (float s)
         {
-            if (std::abs (s - scale) > 1.0e-4f || ! img.isValid())
-            {
-                scale = s;
-                const int w = jmax (1, roundToInt ((float) src.getWidth() * s)), h = jmax (1, roundToInt ((float) src.getHeight() * s));
-                img = src.rescaled (w, h, Graphics::highResamplingQuality);
-            }
-            return img;
+            if (std::abs (s - scale) <= 1.0e-4f && img.isValid()) return;
+            scale = s;
+            const int w = jmax (1, roundToInt ((float) src.getWidth() * s)), h = jmax (1, roundToInt ((float) src.getHeight() * s));
+            img = src.rescaled (w, h, Graphics::highResamplingQuality);
         }
+        // anti-gel v2 : le cache s'il existe, sinon l'image d'origine en attendant le timer
+        const Image& get() const { return img.isValid() ? img : src; }
     };
 
     //==========================================================================
@@ -114,24 +113,43 @@ namespace
             scale = s;
             const int bw = jmax (1, roundToInt ((float) box.getWidth() * s)), bh = jmax (1, roundToInt ((float) box.getHeight() * s));
             src = down.getClippedImage (box).rescaled (bw, bh, Graphics::highResamplingQuality).convertedToFormat (Image::ARGB);
-            for (auto& f : frames) f = {};
-            }
+            // anti-gel v2 : les anciennes positions restent affichables en attendant les nouvelles (pas de saut visuel)
+            for (size_t i = 0; i < frames.size(); ++i) { if (frames[i].isValid()) oldFrames[i] = frames[i]; frames[i] = {}; }
+        }
 
-        // calcule à l'avance une position manquante (appelé par le timer : jamais de gros calcul pendant un paint)
-        bool buildNextMissing()
+        // calcule à l'avance une position manquante, en partant de la position actuelle
+        // (appelé par le timer : jamais de gros calcul pendant un paint)
+        bool buildNextMissing (int around)
         {
             if (scale < 0.0f) return false;
-            for (int i = 0; i < kFrames; ++i)
-                if (! frames[(size_t) i].isValid()) { frames[(size_t) i] = build ((float) i / (float) (kFrames - 1)); return true; }
+            around = jlimit (0, kFrames - 1, around);
+            for (int d = 0; d < kFrames; ++d)
+                for (int i : { around - d, around + d })
+                    if (i >= 0 && i < kFrames && ! frames[(size_t) i].isValid())
+                    { frames[(size_t) i] = build ((float) i / (float) (kFrames - 1)); return true; }
+            for (auto& f : oldFrames) f = {};      // toutes les positions sont prêtes : on libère les anciennes
             return false;
         }
 
         // t = 0 : orteil levé, t = 1 : orteil enfoncé
-        const Image& frame (int i)
+        // Anti-gel v2 : le dessin n'utilise que des positions déjà calculées (la plus proche, ou celle de l'ancienne
+        // taille) ; aucune n'est calculée dans paint. Renvoie nullptr si rien n'est encore prêt.
+        const Image* frame (int i) const
         {
             i = jlimit (0, kFrames - 1, i);
-            if (! frames[(size_t) i].isValid()) frames[(size_t) i] = build ((float) i / (float) (kFrames - 1));
-            return frames[(size_t) i];
+            for (auto* set : { &frames, &oldFrames })
+                for (int d = 0; d < kFrames; ++d)
+                {
+                    if (i - d >= 0 && (*set)[(size_t) (i - d)].isValid()) return &(*set)[(size_t) (i - d)];
+                    if (i + d < kFrames && (*set)[(size_t) (i + d)].isValid()) return &(*set)[(size_t) (i + d)];
+                }
+            return nullptr;
+        }
+        // en attendant la première position : le calque d'origine (orteil enfoncé), sans calcul
+        void drawOriginal (Graphics& g, Rectangle<float> dest) const
+        {
+            g.drawImage (down, roundToInt (dest.getX()), roundToInt (dest.getY()), roundToInt (dest.getWidth()), roundToInt (dest.getHeight()),
+                         box.getX(), box.getY(), box.getWidth(), box.getHeight());
         }
 
     private:
@@ -295,7 +313,7 @@ namespace
         Image down, src;
         Rectangle<int> box { 0, 0, kW, kH };
         float scale = -1.0f;
-        std::array<Image, kFrames> frames;
+        std::array<Image, kFrames> frames, oldFrames;
     };
 
     //==========================================================================
@@ -334,22 +352,40 @@ public:
         startTimerHz (30);
     }
 
-    void resized() override { s = (float) getWidth() / (float) kW; repaint(); }
+    // anti-gel v2 : jamais de calcul lourd ici, les caches seront refaits par le timer quand la taille sera stable
+    void resized() override { s = (float) getWidth() / (float) kW; resizeSettle = 4; repaint(); }
+
+    // caches d'images à la taille réelle en pixels (fenêtre x échelle Windows / Retina) : appelé par le timer
+    // (et une fois à l'ouverture de la fenêtre), jamais par paint
+    void rebuildCaches()
+    {
+        if (getWidth() <= 0) return;
+        const float ps = s * dispScale;
+        for (auto* c : { &bg, &fsCap, &lever }) c->prepare (ps);
+        treadle.prepare (ps);
+        askRepaint (getLocalBounds());
+    }
 
     void paint (Graphics& g) override
     {
-        const float ps = s * physScale();
-        g.drawImage (bg.get (ps), getLocalBounds().toFloat());
+        // anti-gel v2 : aucun rescale ni calcul de cache ici, on dessine les caches existants (ou les originaux)
+        lastPaintMs = Time::getMillisecondCounterHiRes();
+        repaintAskedMs = 0.0;
+        g.fillAll (Colours::black);
+        g.drawImage (bg.get(), getLocalBounds().toFloat());
 
         // ---- plateau (deux positions voisines fondues -> mouvement continu) ----
-        treadle.prepare (ps);
         const float fpos = jlimit (0.0f, 1.0f, drawnPedal) * (float) (kFrames - 1);
         const int f0 = jlimit (0, kFrames - 1, (int) std::floor (fpos)), f1 = jmin (kFrames - 1, f0 + 1);
         const float fr = fpos - (float) f0;
         const auto tb = r (treadle.designBounds().toFloat());
         g.setOpacity (1.0f);
-        g.drawImage (treadle.frame (f0), tb);
-        if (fr > 0.02f && f1 != f0) { g.setOpacity (fr); g.drawImage (treadle.frame (f1), tb); g.setOpacity (1.0f); }
+        if (auto* im0 = treadle.frame (f0))
+        {
+            g.drawImage (*im0, tb);
+            if (fr > 0.02f && f1 != f0) if (auto* im1 = treadle.frame (f1)) { g.setOpacity (fr); g.drawImage (*im1, tb); g.setOpacity (1.0f); }
+        }
+        else treadle.drawOriginal (g, tb);
 
         // ---- sélecteur : le chapeau laiton reste fixe (reflets), seul le repère gravé tourne vers la LED choisie ----
         {
@@ -377,7 +413,7 @@ public:
         // ---- inverseur CLASSIC / CHORDS : le levier coulisse dans la fente (même éclairage, aucune image retournée) ----
         {
             const float dx = kSlotCx + (2.0f * tgAnim - 1.0f) * kTravel - kLever.getCentreX();
-            g.drawImage (lever.get (ps), r (kLever.translated (dx, 0.0f)));
+            g.drawImage (lever.get(), r (kLever.translated (dx, 0.0f)));
         }
 
         // ---- footswitch : la bague et l'écrou restent fixes, seul le chapeau s'enfonce ----
@@ -391,7 +427,7 @@ public:
             // chapeau : plus loin de l'objectif (un peu plus petit), légèrement plus bas, moins éclairé
             const float sc = 1.0f - 0.075f * p, R = kFsCapSprR * s * sc;
             const Point<float> cc (c.x + 0.4f * s * p, c.y + 2.0f * s * p);
-            g.drawImage (fsCap.get (ps), Rectangle<float> (cc.x - R, cc.y - R, 2 * R, 2 * R));
+            g.drawImage (fsCap.get(), Rectangle<float> (cc.x - R, cc.y - R, 2 * R, 2 * R));
             const float ri = kFsCapR * s * sc;
             g.setColour (Colours::black.withAlpha (0.28f * p));
             g.fillEllipse (cc.x - ri, cc.y - ri, 2 * ri, 2 * ri);
@@ -501,10 +537,13 @@ private:
 
     Rectangle<float> r (Rectangle<float> d) const { return d * s; }
     Point<float> r (Point<float> d) const { return d * s; }
-    float physScale() const
+    float physScale() const { return jlimit (1.0f, 4.0f, (float) Component::getApproximateScaleFactorForComponent (this)); }
+
+    // anti-gel v2 : chaque redessin demandé par le timer est noté pour le chien de garde
+    void askRepaint (Rectangle<int> area)
     {
-        if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) return jmax (1.0f, (float) d->scale);
-        return 1.0f;
+        if (repaintAskedMs <= 0.0) repaintAskedMs = Time::getMillisecondCounterHiRes();
+        repaint (area);
     }
     int currentProgram() const { return jlimit (0, wharry::kNumPrograms - 1, (int) std::lround (proc.apvts.getRawParameterValue ("program")->load())); }
     bool param (const char* id) const { return proc.apvts.getRawParameterValue (id)->load() > 0.5f; }
@@ -634,15 +673,37 @@ private:
 
     void timerCallback() override
     {
-        if (auto* ed = findParentComponentOfClass<WharryEditor>()) ed->useSoftwareRenderer();
+        const double now = Time::getMillisecondCounterHiRes();
+        auto* ed = findParentComponentOfClass<WharryEditor>();
+        if (ed != nullptr) ed->checkRenderer();          // fenêtre hôte recréée, ou au plus 1 fois par seconde
+
+        // caches : refaits ici seulement (jamais dans paint), après stabilisation de la taille ou changement d'échelle
+        if (resizeSettle > 0 && --resizeSettle == 0) rebuildCaches();
+        else if (resizeSettle == 0 && now - lastScaleCheckMs > 250.0)
+        {
+            lastScaleCheckMs = now;
+            const float sc = physScale();
+            if (std::abs (sc - dispScale) > 0.01f) { dispScale = sc; rebuildCaches(); }
+        }
+
+        // chien de garde : un redessin demandé n'arrive pas -> on relance le moteur de rendu et on redessine tout
+        if (repaintAskedMs > 0.0 && isShowing() && now - repaintAskedMs > 1500.0 && lastPaintMs < repaintAskedMs)
+        {
+            repaintAskedMs = 0.0;
+            if (ed != nullptr) ed->resetRenderer();
+            repaint();
+        }
+
         // calibration : se termine seule 1,5 s après le dernier mouvement, une fois la course complète parcourue
         if (proc.isCalibrating() && proc.calibrationSpan() > 0.3f && proc.msSincePedalMove() > 1500u) proc.finishCalibration();
-        // anti-gel : les positions du plateau sont précalculées au repos, une ou deux par tick (quelques ms)
-        if (getWidth() > 0)
+        // anti-gel : les positions du plateau sont précalculées au fil des ticks (quelques ms), jamais dans paint
+        if (getWidth() > 0 && resizeSettle == 0)
         {
-            treadle.prepare (s * physScale());
+            const int cur = roundToInt (jlimit (0.0f, 1.0f, proc.getPedalShown()) * (float) (kFrames - 1));
             const double t0 = Time::getMillisecondCounterHiRes();
-            while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing()) {}
+            bool built = false;
+            while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing (cur)) built = true;
+            if (built) askRepaint (r (treadle.designBounds().toFloat()).toNearestInt().expanded (2));
         }
 
         const int prog = currentProgram();
@@ -655,19 +716,19 @@ private:
         if (std::abs (ped - drawnPedal) > 0.002f)
         {
             drawnPedal = ped; screen = true;
-            repaint (r (treadle.designBounds().toFloat()).toNearestInt().expanded (2));
+            askRepaint (r (treadle.designBounds().toFloat()).toNearestInt().expanded (2));
         }
         if (std::abs (sm - drawnSemis) > 0.04f) { drawnSemis = sm; screen = true; }
         if (prog != drawnProgram)
         {
-            repaint (r (Rectangle<float> (kKnob.x - kKnobR, kKnob.y - kKnobR, 2 * kKnobR, 2 * kKnobR)).toNearestInt().expanded (2));
+            askRepaint (r (Rectangle<float> (kKnob.x - kKnobR, kKnob.y - kKnobR, 2 * kKnobR, 2 * kKnobR)).toNearestInt().expanded (2));
             drawnProgram = prog; screen = true;
         }
         if (chords != drawnChords || active != drawnActive)
         {
             if (active != drawnActive && ! pressed) flashTicks = 4;     // commande MIDI / automation : le chapeau plonge brièvement
             drawnChords = chords; drawnActive = active; screen = true;
-            repaint (ledArea (kFsLed));
+            askRepaint (ledArea (kFsLed));
         }
         // animations : levier qui coulisse, chapeau du footswitch qui s'enfonce et remonte
         {
@@ -676,14 +737,14 @@ private:
             {
                 const float d = tgT - tgAnim, st2 = 0.25f;
                 tgAnim = std::abs (d) <= st2 ? tgT : tgAnim + (d > 0 ? st2 : -st2);
-                repaint (r (kLever.withX (kSlotCx - kTravel - kLever.getWidth() * 0.5f).withWidth (kLever.getWidth() + 2.0f * kTravel)).toNearestInt().expanded (3));
+                askRepaint (r (kLever.withX (kSlotCx - kTravel - kLever.getWidth() * 0.5f).withWidth (kLever.getWidth() + 2.0f * kTravel)).toNearestInt().expanded (3));
             }
             if (flashTicks > 0) --flashTicks;
             const float fsT = (pressed || flashTicks > 0) ? 1.0f : 0.0f;
             if (std::abs (fsPress - fsT) > 0.001f)
             {
                 fsPress = fsT > fsPress ? jmin (fsT, fsPress + 0.5f) : jmax (fsT, fsPress - 0.34f);
-                repaint (r (Rectangle<float> (kFsC.x - kFsCapSprR, kFsC.y - kFsCapSprR, 2 * kFsCapSprR, 2 * kFsCapSprR)).toNearestInt().expanded (4));
+                askRepaint (r (Rectangle<float> (kFsC.x - kFsCapSprR, kFsC.y - kFsCapSprR, 2 * kFsCapSprR, 2 * kFsCapSprR)).toNearestInt().expanded (4));
             }
         }
         for (int i = 0; i < 3; ++i)
@@ -692,11 +753,11 @@ private:
             if (std::abs (v - drawnSmall[i]) > 0.002f)
             {
                 drawnSmall[i] = v;
-                repaint (r (Rectangle<float> (kSmall[i].x - kSmallR, kSmall[i].y - kSmallR, 2 * kSmallR, 2 * kSmallR)).toNearestInt().expanded (2));
+                askRepaint (r (Rectangle<float> (kSmall[i].x - kSmallR, kSmall[i].y - kSmallR, 2 * kSmallR, 2 * kSmallR)).toNearestInt().expanded (2));
             }
         }
         if (st != drawnStatus) { drawnStatus = st; screen = true; }
-        if (screen) repaint (r (kScreen).toNearestInt().expanded (2));
+        if (screen) askRepaint (r (kScreen).toNearestInt().expanded (2));
     }
     Rectangle<int> ledArea (Point<float> c) const { const float h = kLedR * 3.8f; return r (Rectangle<float> (c.x - h, c.y - h, 2 * h, 2 * h)).toNearestInt().expanded (1); }
 
@@ -781,6 +842,14 @@ private:
     Typeface::Ptr typeface, typefaceBold;
     float s = kDefaultScale * kRefH / (float) kH;
 
+    // anti-gel v2 : échelle d'affichage, stabilisation après redimensionnement, suivi des redessins
+    float dispScale = 1.0f;
+    int resizeSettle = 0;
+    double lastPaintMs = 0.0, repaintAskedMs = 0.0, lastScaleCheckMs = 0.0;
+public:
+    void initCaches() { dispScale = physScale(); resizeSettle = 0; rebuildCaches(); }
+private:
+
     Drag drag = Drag::None;
     float dragStartY = 0, dragStartVal = 0;
     int dragStartProg = 0;
@@ -804,17 +873,32 @@ WharryEditor::WharryEditor (WharryProcessor& p) : AudioProcessorEditor (&p), pro
     const int maxH = 1120;
     setResizeLimits ((int) std::lround ((double) minH * kW / kH), minH, (int) std::lround ((double) maxH * kW / kH), maxH);
     getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
+    setOpaque (true);                    // anti-gel : l'hôte ne redessine jamais ce qui est derrière la fenêtre
     setScaleIndex (jlimit (-1, 2, proc.uiScaleIdx.load()));
+    view->initCaches();
 }
 
 WharryEditor::~WharryEditor() = default;
 
+//==============================================================================
 // Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D ; avec certains pilotes (Intel)
 // la fenêtre cesse de se rafraîchir alors que le DAW continue. Le moteur logiciel est stable partout.
+//==============================================================================
+// Anti-gel v2 (Studio Wiga) :
+//  1. moteur de rendu logiciel forcé sur Windows (Direct2D peut figer la fenêtre dans certains hôtes),
+//     appliqué à chaque nouvelle fenêtre hôte (peer) et revérifié toutes les secondes, jamais en boucle ;
+//  2. aucun calcul lourd dans paint() : les caches d'images (fond, commandes, positions du plateau) sont refaits
+//     par le timer seulement, après stabilisation de la taille ou quand l'échelle d'affichage change (au plus toutes les 250 ms) ;
+//  3. chien de garde : si un redessin demandé n'est pas arrivé au bout de 1,5 s alors que la fenêtre est
+//     visible, le moteur de rendu est réappliqué et toute la fenêtre est redessinée ;
+//  4. côté audio : aucun appel à l'hôte ni allocation depuis le thread audio (voir PluginProcessor).
 void WharryEditor::useSoftwareRenderer()
 {
+    auto* peer = getPeer();
+    if ((void*) peer != lastPeer) { lastPeer = (void*) peer; repaint(); }
+    lastRendererCheckMs = Time::getMillisecondCounterHiRes();
    #if JUCE_WINDOWS
-    if (auto* peer = getPeer())
+    if (peer != nullptr)
     {
         int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
         if (sw < 0) sw = 0;
@@ -824,7 +908,22 @@ void WharryEditor::useSoftwareRenderer()
    #endif
 }
 
+void WharryEditor::checkRenderer()
+{
+    if ((void*) getPeer() != lastPeer || Time::getMillisecondCounterHiRes() - lastRendererCheckMs > 1000.0)
+        useSoftwareRenderer();
+}
+
+void WharryEditor::resetRenderer()
+{
+    lastPeer = nullptr;
+    useSoftwareRenderer();
+    repaint();
+}
+
+void WharryEditor::paint (Graphics& g) { g.fillAll (Colours::black); }   // la pédale recouvre tout ; fenêtre opaque
 void WharryEditor::parentHierarchyChanged() { useSoftwareRenderer(); }
+void WharryEditor::visibilityChanged()      { useSoftwareRenderer(); if (isShowing()) repaint(); }
 
 void WharryEditor::resized()
 {
